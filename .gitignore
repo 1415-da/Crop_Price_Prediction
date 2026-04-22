@@ -205,3 +205,10 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Project artifacts
+.DS_Store
+Dataset/.DS_Store
+models/
+output/predictions.csv
+*.pkl

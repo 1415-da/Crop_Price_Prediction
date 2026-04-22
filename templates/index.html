@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crop Price Prediction Dashboard</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
+    <div class="container">
+      <a class="navbar-brand fw-bold" href="#">Crop Price Predictor</a>
+    </div>
+  </nav>
+
+  <section class="hero py-5">
+    <div class="container">
+      <h1 class="display-6 fw-bold">Predict Crop Market Prices with ML</h1>
+      <p class="lead text-muted">XGBoost, LightGBM, and Ensemble comparison with EDA and batch prediction.</p>
+    </div>
+  </section>
+
+  <main class="container pb-5">
+    <div class="row g-4">
+      <div class="col-lg-4">
+        <div class="card h-100 shadow-sm">
+          <div class="card-body">
+            <h5 class="card-title">Model & Input</h5>
+
+            <label class="form-label">Select Model</label>
+            <select id="modelSelect" class="form-select mb-3">
+              {% for m in models %}
+              <option value="{{ m }}">{{ m|upper }}</option>
+              {% endfor %}
+            </select>
+
+            <ul class="nav nav-tabs mb-3" id="inputTabs">
+              <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#manualTab">Manual</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#csvTab">CSV</button></li>
+              <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#sampleTab">Sample</button></li>
+            </ul>
+
+            <div class="tab-content">
+              <div class="tab-pane fade show active" id="manualTab">
+                <div class="row g-2">
+                  <div class="col-6"><input id="crop" class="form-control" placeholder="crop (e.g. maize)"></div>
+                  <div class="col-6"><input id="state" class="form-control" placeholder="state (e.g. india)"></div>
+                  <div class="col-6"><input id="month_num" class="form-control" type="number" min="1" max="12" placeholder="month"></div>
+                  <div class="col-6"><input id="rainfall_mm" class="form-control" type="number" step="0.01" placeholder="rainfall"></div>
+                  <div class="col-6"><input id="temperature_c" class="form-control" type="number" step="0.01" placeholder="temperature"></div>
+                  <div class="col-6"><input id="humidity_pct" class="form-control" type="number" step="0.01" placeholder="humidity"></div>
+                  <div class="col-6"><input id="yield_kg_per_ha" class="form-control" type="number" step="0.01" placeholder="yield"></div>
+                  <div class="col-6"><input id="area_ha" class="form-control" type="number" step="0.01" placeholder="area"></div>
+                  <div class="col-6"><input id="lag_price_1" class="form-control" type="number" step="0.01" placeholder="lag price 1"></div>
+                  <div class="col-6"><input id="lag_price_3" class="form-control" type="number" step="0.01" placeholder="lag price 3"></div>
+                  <div class="col-12"><input id="rolling_price_3" class="form-control" type="number" step="0.01" placeholder="rolling price 3"></div>
+                </div>
+                <button class="btn btn-primary w-100 mt-3" onclick="predictManual()">Predict</button>
+              </div>
+
+              <div class="tab-pane fade" id="csvTab">
+                <input id="csvFile" type="file" class="form-control" accept=".csv">
+                <button class="btn btn-success w-100 mt-3" onclick="predictCSV()">Upload & Predict</button>
+              </div>
+
+              <div class="tab-pane fade" id="sampleTab">
+                <input id="sampleN" type="number" class="form-control" value="10" min="1" max="200">
+                <button class="btn btn-warning w-100 mt-3" onclick="generateSample()">Generate & Predict</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-8">
+        <div class="card shadow-sm mb-4">
+          <div class="card-body">
+            <h5 class="card-title">Prediction Result</h5>
+            <div id="predictionCard" class="result-card">No prediction yet.</div>
+            <div id="downloadArea" class="mt-3"></div>
+            <div id="previewTable" class="table-responsive mt-3"></div>
+          </div>
+        </div>
+
+        <div class="card shadow-sm mb-4">
+          <div class="card-body">
+            <h5 class="card-title">Model Metrics</h5>
+            <div class="table-responsive">
+              <table class="table table-striped align-middle">
+                <thead><tr><th>Model</th><th>MAE</th><th>RMSE</th><th>R2</th></tr></thead>
+                <tbody id="metricsBody">
+                  {% for r in metrics %}
+                  <tr><td>{{ r.model }}</td><td>{{ r.MAE }}</td><td>{{ r.RMSE }}</td><td>{{ r.R2 }}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            <div id="metricsPlot" style="height: 360px;"></div>
+          </div>
+        </div>
+
+        <div class="card shadow-sm">
+          <div class="card-body">
+            <h5 class="card-title">EDA</h5>
+            <button class="btn btn-outline-dark btn-sm" onclick="loadEDA()">Refresh EDA</button>
+            <pre id="edaSummary" class="mt-3 small-box"></pre>
+            <div id="corrPlot" style="height: 400px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const initialMetricsPlot = {{ metrics_plot|safe if metrics_plot else 'null' }};
+    if (initialMetricsPlot) Plotly.newPlot("metricsPlot", initialMetricsPlot.data, initialMetricsPlot.layout);
+  </script>
+  <script src="{{ url_for('static', filename='script.js') }}"></script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

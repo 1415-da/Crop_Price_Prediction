@@ -1,0 +1,37 @@
+body {
+  background: #f5f7fb;
+  font-family: "Inter", "Segoe UI", Tahoma, sans-serif;
+  color: #1f2937;
+}
+
+.hero {
+  background: linear-gradient(135deg, #ffffff 0%, #eef3ff 100%);
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.card {
+  border: none;
+  border-radius: 14px;
+}
+
+.card-title {
+  font-weight: 700;
+}
+
+.result-card {
+  min-height: 72px;
+  border-radius: 10px;
+  padding: 16px;
+  background: #eef6ff;
+  border: 1px solid #cfe5ff;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.small-box {
+  background: #111827;
+  color: #f9fafb;
+  border-radius: 8px;
+  padding: 12px;
+  white-space: pre-wrap;
+}
