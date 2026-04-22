@@ -5,8 +5,26 @@ body {
 }
 
 .hero {
-  background: linear-gradient(135deg, #ffffff 0%, #eef3ff 100%);
-  border-bottom: 1px solid #e5e7eb;
+  background:
+    linear-gradient(120deg, rgba(7, 46, 36, 0.82), rgba(10, 34, 70, 0.68)),
+    url("https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=1800&q=80")
+      center/cover no-repeat;
+  border-bottom: 1px solid #1f2937;
+}
+
+.hero-overlay {
+  border-radius: 14px;
+  background: rgba(17, 24, 39, 0.45);
+  backdrop-filter: blur(1px);
+  color: #f9fafb;
+  max-width: 780px;
+}
+
+.brand-kicker {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: #c7f9cc;
 }
 
 .card {
@@ -34,4 +52,35 @@ body {
   border-radius: 8px;
   padding: 12px;
   white-space: pre-wrap;
+}
+
+.crop-image-card {
+  position: relative;
+  height: 180px;
+  overflow: hidden;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.14);
+}
+
+.crop-image-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.02);
+}
+
+.crop-image-label {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  background: rgba(17, 24, 39, 0.66);
+  color: #f9fafb;
+  font-weight: 600;
+  font-size: 0.92rem;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+.is-hidden {
+  display: none;
 }

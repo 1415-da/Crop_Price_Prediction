@@ -200,6 +200,8 @@ def predict_csv():
             "model": model_name,
             "rows": int(len(out)),
             "download_url": "/download_predictions",
+            "input_preview": df.head(10).to_dict(orient="records"),
+            "predictions": out.head(25).to_dict(orient="records"),
             "preview": out.head(10).to_dict(orient="records"),
         }
     )
@@ -208,10 +210,29 @@ def predict_csv():
 @app.route("/generate_sample", methods=["GET"])
 def generate_sample():
     n = int(request.args.get("n", 10))
-    model_name = request.args.get("model", "ensemble").strip().lower()
+    sample_df = generate_sample_rows(n=n)
+
+    return jsonify(
+        {
+            "message": "Sample data generated",
+            "rows": int(len(sample_df)),
+            "sample_data": sample_df.to_dict(orient="records"),
+            "preview": sample_df.head(10).to_dict(orient="records"),
+        }
+    )
+
+
+@app.route("/predict_sample", methods=["POST"])
+def predict_sample():
+    payload = request.get_json(force=True) if request.is_json else {}
+    sample_data = payload.get("sample_data", [])
+    model_name = str(payload.get("model", "ensemble")).strip().lower()
     model = models.get(model_name, models["ensemble"])
 
-    sample_df = generate_sample_rows(n=n)
+    if not sample_data:
+        return jsonify({"error": "No sample data provided"}), 400
+
+    sample_df = pd.DataFrame(sample_data)
     X = prepare_input_df(sample_df)
     X_t = preprocessor.transform(X)
     preds = model.predict(X_t)
@@ -222,10 +243,13 @@ def generate_sample():
 
     return jsonify(
         {
-            "message": "Sample data generated and predicted",
+            "message": "Sample prediction completed",
             "model": model_name,
             "rows": int(len(out)),
             "download_url": "/download_predictions",
+            "predictions": out[
+                ["commodity_name", "state_name", "month_num", "season", "predicted_price"]
+            ].head(25).to_dict(orient="records"),
             "preview": out.head(10).to_dict(orient="records"),
         }
     )
