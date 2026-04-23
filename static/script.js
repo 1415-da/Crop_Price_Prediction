@@ -250,8 +250,28 @@ function plotFromJson(targetId, jsonStr) {
     return;
   }
   const fig = JSON.parse(jsonStr);
+  
+  fig.layout = fig.layout || {};
+  fig.layout.paper_bgcolor = 'rgba(0,0,0,0)';
+  fig.layout.plot_bgcolor = 'rgba(0,0,0,0)';
+  fig.layout.font = { family: 'Inter, sans-serif' };
+
+  if (fig.data) {
+    fig.data.forEach(trace => {
+        if (!trace.marker) trace.marker = {};
+        if (!trace.line) trace.line = {};
+        // Make the main color match the green theme if no color is set
+        if (trace.type === 'bar' || trace.type === 'histogram') {
+            if (!trace.marker.color) trace.marker.color = '#177B43';
+        } else if (trace.type === 'scatter') {
+            if (!trace.line.color) trace.line.color = '#177B43';
+            if (!trace.marker.color) trace.marker.color = '#177B43';
+        }
+    });
+  }
+
   if (typeof Plotly !== "undefined") {
-    Plotly.react(el, fig.data || [], fig.layout || {}, { responsive: true });
+    Plotly.react(el, fig.data || [], fig.layout, { responsive: true });
   }
 }
 
@@ -350,7 +370,10 @@ function renderMetricsDiagnostics(diag) {
       ],
       layout: {
         title: `Confusion Matrix - ${bestModel.toUpperCase()}`,
-        margin: { t: 50, l: 70, r: 20, b: 50 }
+        margin: { t: 50, l: 70, r: 20, b: 50 },
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: 'Inter, sans-serif' }
       }
     };
     Plotly.newPlot("confusionMatrixPlot", cmFig.data, cmFig.layout);
@@ -384,7 +407,10 @@ function renderMetricsDiagnostics(diag) {
         title: "ROC Curves",
         xaxis: { title: "False Positive Rate" },
         yaxis: { title: "True Positive Rate" },
-        margin: { t: 50, l: 60, r: 20, b: 60 }
+        margin: { t: 50, l: 60, r: 20, b: 60 },
+        paper_bgcolor: 'rgba(0,0,0,0)',
+        plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { family: 'Inter, sans-serif' }
       }
     );
   }
@@ -472,4 +498,12 @@ document.addEventListener("DOMContentLoaded", () => {
   syncOverviewToggleText();
   loadMetricsDiagnostics();
   initEdaPlaceholders();
+
+  // Fix plot resizing issues when switching tabs
+  const tabEls = document.querySelectorAll('button[data-bs-toggle="tab"]');
+  tabEls.forEach(el => {
+    el.addEventListener('shown.bs.tab', () => {
+      window.dispatchEvent(new Event('resize'));
+    });
+  });
 });
