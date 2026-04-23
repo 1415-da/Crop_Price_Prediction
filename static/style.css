@@ -84,3 +84,7 @@ body {
 .is-hidden {
   display: none;
 }
+
+.right-panel-tabs .nav-link {
+  font-weight: 600;
+}

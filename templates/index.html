@@ -6,7 +6,7 @@
   <title>CropIntelli | Crop Price Prediction Dashboard</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 </head>
 <body>
   <nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
@@ -116,59 +116,119 @@
       </div>
 
       <div class="col-lg-8">
-        <div class="card shadow-sm mb-4">
-          <div class="card-body">
-            <h5 class="card-title">Prediction Result</h5>
-            <div id="predictionCard" class="result-card">No prediction yet.</div>
-            <div id="downloadArea" class="mt-3"></div>
-            <div id="predictionTable" class="table-responsive mt-3"></div>
-          </div>
-        </div>
+        <ul class="nav nav-pills mb-3 right-panel-tabs" id="rightPanelTabs" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#predictionPanel" type="button" role="tab">
+              Prediction
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#metricsPanel" type="button" role="tab">
+              Metrics
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#edaPanel" type="button" role="tab">
+              edaSummary
+            </button>
+          </li>
+        </ul>
 
-        <div id="dataOverviewCard" class="card shadow-sm mb-4 is-hidden">
-          <div class="card-body">
-            <div class="d-flex justify-content-between align-items-center">
-              <h5 class="card-title mb-0">Data Overview</h5>
-              <span id="overviewState" class="badge text-bg-success">Visible</span>
+        <div class="tab-content">
+          <div class="tab-pane fade show active" id="predictionPanel" role="tabpanel">
+            <div class="card shadow-sm mb-4">
+              <div class="card-body">
+                <h5 class="card-title">Prediction Result</h5>
+                <div id="predictionCard" class="result-card">No prediction yet.</div>
+                <div id="downloadArea" class="mt-3"></div>
+                <div id="predictionTable" class="table-responsive mt-3"></div>
+              </div>
             </div>
-            <div id="previewTable" class="table-responsive mt-3"></div>
-          </div>
-        </div>
 
-        <div class="card shadow-sm mb-4">
-          <div class="card-body">
-            <h5 class="card-title">Model Metrics</h5>
-            <div class="table-responsive">
-              <table class="table table-striped align-middle">
-                <thead><tr><th>Model</th><th>MAE</th><th>RMSE</th><th>R2</th></tr></thead>
-                <tbody id="metricsBody">
-                  {% for r in metrics %}
-                  <tr><td>{{ r.model }}</td><td>{{ r.MAE }}</td><td>{{ r.RMSE }}</td><td>{{ r.R2 }}</td></tr>
-                  {% endfor %}
-                </tbody>
-              </table>
+            <div id="dataOverviewCard" class="card shadow-sm mb-4 is-hidden">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                  <h5 class="card-title mb-0">Data Overview</h5>
+                  <span id="overviewState" class="badge text-bg-success">Visible</span>
+                </div>
+                <div id="overviewDownloadArea" class="mt-2"></div>
+                <div id="previewTable" class="table-responsive mt-3"></div>
+              </div>
             </div>
-            <div id="metricsPlot" style="height: 360px;"></div>
           </div>
-        </div>
 
-        <div class="card shadow-sm">
-          <div class="card-body">
-            <h5 class="card-title">EDA</h5>
-            <button class="btn btn-outline-dark btn-sm" onclick="loadEDA()">Refresh EDA</button>
-            <pre id="edaSummary" class="mt-3 small-box"></pre>
-            <div id="corrPlot" style="height: 400px;"></div>
+          <div class="tab-pane fade" id="metricsPanel" role="tabpanel">
+            <div class="card shadow-sm mb-4">
+              <div class="card-body">
+                <h5 class="card-title">Model Metrics</h5>
+                <p id="metricsSourceText" class="text-muted small mb-2">Source: {{ runtime_source }}</p>
+                <p id="metricsNoteText" class="text-muted small mb-2"></p>
+                <div class="table-responsive">
+                  <table class="table table-striped align-middle">
+                    <thead><tr><th>Model</th><th>MAE</th><th>RMSE</th><th>R2</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>F1</th><th>Avg Pred Price</th></tr></thead>
+                    <tbody id="metricsBody">
+                      {% for r in metrics %}
+                      <tr><td>{{ r.model }}</td><td>{{ r.MAE }}</td><td>{{ r.RMSE }}</td><td>{{ r.R2 }}</td><td>{{ r.Accuracy }}</td><td>{{ r.Precision }}</td><td>{{ r.Recall }}</td><td>{{ r.F1 }}</td><td>{{ r.AvgPredPrice }}</td></tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+                <p class="text-muted small mb-2">Confusion Matrix (best RMSE model)</p>
+                <div id="confusionMatrixPlot" style="height: 320px;"></div>
+                <p class="text-muted small mb-2 mt-3">ROC / AUC Curves</p>
+                <div id="rocAucPlot" style="height: 340px;"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-pane fade" id="edaPanel" role="tabpanel">
+            <div class="card shadow-sm">
+              <div class="card-body">
+                <h5 class="card-title">EDA Analyst Report</h5>
+                <p class="text-muted mb-3">Upload one or both datasets to generate instant analyst-style EDA insights.</p>
+                <div class="row g-2 mb-3">
+                  <div class="col-md-5">
+                    <label class="form-label small mb-1">Price Dataset (optional)</label>
+                    <input id="edaPriceFile" type="file" class="form-control form-control-sm" accept=".csv">
+                  </div>
+                  <div class="col-md-5">
+                    <label class="form-label small mb-1">Yield/Weather Dataset (optional)</label>
+                    <input id="edaYieldFile" type="file" class="form-control form-control-sm" accept=".csv">
+                  </div>
+                  <div class="col-md-2 d-grid">
+                    <button class="btn btn-outline-dark btn-sm mt-md-4" onclick="loadEDA()">Run EDA</button>
+                  </div>
+                </div>
+
+                <div class="row g-3">
+                  <div class="col-12"><div class="card"><div class="card-body"><h6>Dataset Overview</h6><pre id="edaOverviewText" class="small-box mb-0"></pre></div></div></div>
+                  <div class="col-12"><div class="card"><div class="card-body"><h6>Missing Values</h6><p class="text-muted small">Missingness by column and potential data quality hotspots.</p><div id="edaMissingPlot" style="height:320px;"></div></div></div></div>
+                  <div class="col-md-6"><div class="card"><div class="card-body"><h6>Price Histogram</h6><p class="text-muted small">Distribution of crop prices.</p><div id="edaPriceHist" style="height:300px;"></div></div></div></div>
+                  <div class="col-md-6"><div class="card"><div class="card-body"><h6>Price Boxplot</h6><p class="text-muted small">Outliers and spread in market prices.</p><div id="edaPriceBox" style="height:300px;"></div></div></div></div>
+                  <div class="col-12"><div class="card"><div class="card-body"><h6>Seasonal / Time Trend</h6><p class="text-muted small">Average price trend with moving average over time.</p><div id="edaSeasonalTrend" style="height:340px;"></div></div></div></div>
+                  <div class="col-md-6"><div class="card"><div class="card-body"><h6>Top Expensive Crops</h6><div id="edaCropTop" style="height:320px;"></div></div></div></div>
+                  <div class="col-md-6"><div class="card"><div class="card-body"><h6>Top Lowest Priced Crops</h6><div id="edaCropLow" style="height:320px;"></div></div></div></div>
+                  <div class="col-12"><div class="card"><div class="card-body"><h6>State/Market-wise Prices</h6><div id="edaStatePrice" style="height:330px;"></div></div></div></div>
+                  <div class="col-md-6"><div class="card"><div class="card-body"><h6>Yield vs Price</h6><div id="edaYieldPrice" style="height:320px;"></div></div></div></div>
+                  <div class="col-md-6"><div class="card"><div class="card-body"><h6>Rainfall vs Price</h6><div id="edaRainPrice" style="height:320px;"></div></div></div></div>
+                  <div class="col-md-6"><div class="card"><div class="card-body"><h6>Temperature vs Price</h6><div id="edaTempPrice" style="height:320px;"></div></div></div></div>
+                  <div class="col-md-6"><div class="card"><div class="card-body"><h6>Humidity vs Price</h6><div id="edaHumPrice" style="height:320px;"></div></div></div></div>
+                  <div class="col-12"><div class="card"><div class="card-body"><h6>Correlation Heatmap</h6><div id="edaCorr" style="height:360px;"></div></div></div></div>
+                  <div class="col-12"><div class="card"><div class="card-body"><h6>Outlier Detection</h6><div id="edaOutliers" style="height:360px;"></div></div></div></div>
+                  <div class="col-12"><div class="card"><div class="card-body"><h6>Feature Importance</h6><select id="edaFeatureModel" class="form-select form-select-sm mb-2" onchange="updateFeatureImportance()"></select><div id="edaFeatureImportance" style="height:340px;"></div></div></div></div>
+                  <div class="col-md-6"><div class="card"><div class="card-body"><h6>Actual vs Predicted</h6><div id="edaResidualScatter" style="height:320px;"></div></div></div></div>
+                  <div class="col-md-6"><div class="card"><div class="card-body"><h6>Residual Distribution</h6><div id="edaResidualHist" style="height:320px;"></div></div></div></div>
+                  <div class="col-12"><div class="card"><div class="card-body"><h6>Summary Insights</h6><ul id="edaInsights" class="mb-0"></ul></div></div></div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
     </div>
   </main>
 
-  <script>
-    const initialMetricsPlot = {{ metrics_plot|safe if metrics_plot else 'null' }};
-    if (initialMetricsPlot) Plotly.newPlot("metricsPlot", initialMetricsPlot.data, initialMetricsPlot.layout);
-  </script>
-  <script src="{{ url_for('static', filename='script.js') }}?v=2"></script>
+  <script src="{{ url_for('static', filename='script.js') }}?v=4"></script>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

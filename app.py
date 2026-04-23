@@ -3,9 +3,11 @@ import json
 import pickle
 import numpy as np
 import pandas as pd
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_curve, auc
 import plotly.express as px
 import plotly
 from flask import Flask, render_template, request, jsonify, send_file
+from eda import generate_eda_report
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, "models")
@@ -14,6 +16,8 @@ DATA_DIR = os.path.join(BASE_DIR, "Dataset")
 
 METRICS_PATH = os.path.join(OUTPUT_DIR, "model_metrics.csv")
 PRED_PATH = os.path.join(OUTPUT_DIR, "predictions.csv")
+OVERVIEW_PATH = os.path.join(OUTPUT_DIR, "data_overview.csv")
+DIAG_PATH = os.path.join(OUTPUT_DIR, "model_diagnostics.json")
 PRICE_PATH = os.path.join(DATA_DIR, "crop_price_dataset.csv")
 YIELD_PATH = os.path.join(DATA_DIR, "Custom_Crops_yield_Historical_Dataset.csv")
 
@@ -46,6 +50,9 @@ numeric_cols = artifacts["numeric_cols"]
 categorical_cols = artifacts["categorical_cols"]
 numeric_defaults = artifacts["numeric_defaults"]
 cat_defaults = artifacts["cat_defaults"]
+runtime_metrics_rows = []
+runtime_diagnostics = {"models": {}, "best_model": None}
+runtime_source = "No input evaluated yet."
 
 
 def prepare_input_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -98,18 +105,135 @@ def get_metrics_df():
     return pd.DataFrame(columns=["model", "MAE", "RMSE", "R2"])
 
 
-def metrics_plot_json(metrics_df: pd.DataFrame):
-    if metrics_df.empty:
-        return None
-    fig = px.bar(
-        metrics_df,
-        x="model",
-        y=["MAE", "RMSE", "R2"],
-        barmode="group",
-        title="Model Comparison (MAE / RMSE / R2)",
-        template="plotly_white",
-    )
-    return json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
+def get_diagnostics():
+    if os.path.exists(DIAG_PATH):
+        try:
+            with open(DIAG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {"models": {}, "best_model": None}
+    return {"models": {}, "best_model": None}
+
+
+def _pick_target_column(df: pd.DataFrame):
+    candidates = ["avg_modal_price", "actual_price", "target", "price"]
+    lower_to_actual = {c.lower(): c for c in df.columns}
+    for c in candidates:
+        if c in lower_to_actual:
+            return lower_to_actual[c]
+    return None
+
+
+def compute_runtime_metrics(input_df: pd.DataFrame, source_label: str):
+    global runtime_metrics_rows, runtime_diagnostics, runtime_source
+
+    if input_df is None or input_df.empty:
+        runtime_metrics_rows = []
+        runtime_diagnostics = {"models": {}, "best_model": None}
+        runtime_source = source_label
+        return
+
+    X = prepare_input_df(input_df)
+    target_col = _pick_target_column(input_df)
+    y_true = None
+    used_proxy_target = False
+    if target_col:
+        y_true = pd.to_numeric(input_df[target_col], errors="coerce")
+        valid_mask = y_true.notna()
+        if valid_mask.sum() > 0:
+            X_eval = X.loc[valid_mask]
+            y_true = y_true.loc[valid_mask].values
+        else:
+            X_eval = X
+            y_true = None
+    else:
+        X_eval = X
+
+    if y_true is None:
+        # Fallback proxy target to avoid blank metrics for manual/generated input.
+        # This uses lag_price_1 as a demand proxy target when true market price is absent.
+        if "lag_price_1" in X_eval.columns:
+            proxy = pd.to_numeric(X_eval["lag_price_1"], errors="coerce")
+            proxy = proxy.fillna(proxy.median() if not proxy.dropna().empty else 0.0)
+            y_true = proxy.values
+            used_proxy_target = True
+        else:
+            y_true = np.zeros(len(X_eval), dtype=float)
+            used_proxy_target = True
+
+    rows = []
+    diags = {"models": {}, "best_model": None}
+    for name, model in models.items():
+        X_t = preprocessor.transform(X_eval)
+        pred = model.predict(X_t)
+        row = {
+            "model": name,
+            "MAE": None,
+            "RMSE": None,
+            "R2": None,
+            "Accuracy": None,
+            "Precision": None,
+            "Recall": None,
+            "F1": None,
+            "AUC": None,
+            "AvgPredPrice": round(float(np.mean(pred)), 2),
+        }
+
+        if y_true is not None and len(y_true) == len(pred):
+            mae = mean_absolute_error(y_true, pred)
+            rmse = np.sqrt(mean_squared_error(y_true, pred))
+            r2 = r2_score(y_true, pred) if len(y_true) > 1 else np.nan
+            if "lag_price_1" in X_eval.columns:
+                baseline = pd.to_numeric(X_eval["lag_price_1"], errors="coerce").fillna(np.nanmedian(y_true)).values
+            else:
+                baseline = np.full_like(y_true, float(np.nanmedian(y_true)), dtype=float)
+            actual_up = (y_true >= baseline).astype(int)
+            pred_up = (pred >= baseline).astype(int)
+            acc = accuracy_score(actual_up, pred_up)
+            precision = precision_score(actual_up, pred_up, zero_division=0)
+            recall = recall_score(actual_up, pred_up, zero_division=0)
+            f1 = f1_score(actual_up, pred_up, zero_division=0)
+            cm = confusion_matrix(actual_up, pred_up, labels=[0, 1]).tolist()
+            if len(np.unique(actual_up)) > 1:
+                score_for_roc = pred - baseline
+                fpr, tpr, _ = roc_curve(actual_up, score_for_roc)
+                auc_score = auc(fpr, tpr)
+            else:
+                # Avoid warnings/crashes when only one class exists in current input.
+                fpr, tpr, auc_score = [0.0, 1.0], [0.0, 1.0], 0.5
+
+            row.update(
+                {
+                    "MAE": round(float(mae), 4),
+                    "RMSE": round(float(rmse), 4),
+                    "R2": round(float(r2), 4) if not np.isnan(r2) else None,
+                    "Accuracy": round(float(acc), 4),
+                    "Precision": round(float(precision), 4),
+                    "Recall": round(float(recall), 4),
+                    "F1": round(float(f1), 4),
+                    "AUC": round(float(auc_score), 4),
+                }
+            )
+            diags["models"][name] = {
+                "confusion_matrix": cm,
+                "roc_curve": {
+                    "fpr": [float(x) for x in fpr],
+                    "tpr": [float(x) for x in tpr],
+                    "auc": float(auc_score),
+                },
+            }
+        rows.append(row)
+
+    metrics_df = pd.DataFrame(rows)
+    if "RMSE" in metrics_df.columns and metrics_df["RMSE"].notna().any():
+        metrics_df = metrics_df.sort_values("RMSE", na_position="last")
+        diags["best_model"] = str(metrics_df.iloc[0]["model"])
+    else:
+        diags["best_model"] = str(metrics_df.iloc[0]["model"]) if not metrics_df.empty else None
+
+    runtime_metrics_rows = metrics_df.to_dict(orient="records")
+    runtime_diagnostics = diags
+    runtime_source = f"{source_label} (proxy target)" if used_proxy_target else source_label
 
 
 def generate_sample_rows(n=10):
@@ -142,8 +266,8 @@ def generate_sample_rows(n=10):
 
 @app.route("/")
 def home():
-    metrics_df = get_metrics_df()
-    plot_json = metrics_plot_json(metrics_df)
+    metrics_df = pd.DataFrame(runtime_metrics_rows)
+    diagnostics = runtime_diagnostics
 
     preview = pd.DataFrame(artifacts.get("sample_preview", [])).head(5)
     preview_records = preview.to_dict(orient="records") if not preview.empty else []
@@ -152,8 +276,9 @@ def home():
         "index.html",
         models=["xgboost", "lightgbm", "ensemble"],
         metrics=metrics_df.to_dict(orient="records"),
-        metrics_plot=plot_json,
+        diagnostics=diagnostics,
         preview_rows=preview_records,
+        runtime_source=runtime_source,
     )
 
 
@@ -166,6 +291,7 @@ def predict_manual():
     model = models.get(model_name, models["ensemble"])
     X_t = preprocessor.transform(X)
     pred = model.predict(X_t)
+    compute_runtime_metrics(df, "Manual input")
 
     return jsonify(
         {
@@ -193,6 +319,8 @@ def predict_csv():
     out = df.copy()
     out["predicted_price"] = np.round(preds, 2)
     out.to_csv(PRED_PATH, index=False)
+    df.to_csv(OVERVIEW_PATH, index=False)
+    compute_runtime_metrics(df, "CSV upload")
 
     return jsonify(
         {
@@ -211,6 +339,7 @@ def predict_csv():
 def generate_sample():
     n = int(request.args.get("n", 10))
     sample_df = generate_sample_rows(n=n)
+    sample_df.to_csv(OVERVIEW_PATH, index=False)
 
     return jsonify(
         {
@@ -240,6 +369,7 @@ def predict_sample():
     out = sample_df.copy()
     out["predicted_price"] = np.round(preds, 2)
     out.to_csv(PRED_PATH, index=False)
+    compute_runtime_metrics(sample_df, "Generated sample")
 
     return jsonify(
         {
@@ -257,57 +387,46 @@ def predict_sample():
 
 @app.route("/metrics", methods=["GET"])
 def metrics():
-    metrics_df = get_metrics_df()
+    metrics_df = pd.DataFrame(runtime_metrics_rows)
     return jsonify(
         {
             "metrics": metrics_df.to_dict(orient="records"),
-            "plot": metrics_plot_json(metrics_df),
+            "diagnostics": runtime_diagnostics,
+            "source": runtime_source,
         }
     )
 
 
-@app.route("/eda", methods=["GET"])
-def eda():
-    price_df = pd.read_csv(PRICE_PATH)
-    yw_df = pd.read_csv(YIELD_PATH)
+@app.route("/eda_analysis", methods=["POST", "GET"])
+def eda_analysis():
+    diagnostics = get_diagnostics()
+    if request.method == "POST":
+        price_file = request.files.get("price_file")
+        yield_file = request.files.get("yield_file")
+        if price_file is not None and yield_file is not None:
+            mode = "combined"
+            price_df = pd.read_csv(price_file)
+            yield_df = pd.read_csv(yield_file)
+        elif price_file is not None:
+            mode = "price_only"
+            price_df = pd.read_csv(price_file)
+            yield_df = pd.DataFrame()
+        elif yield_file is not None:
+            mode = "yield_weather_only"
+            price_df = pd.DataFrame()
+            yield_df = pd.read_csv(yield_file)
+        else:
+            mode = "default_combined"
+            price_df = pd.read_csv(PRICE_PATH)
+            yield_df = pd.read_csv(YIELD_PATH)
+    else:
+        mode = "default_combined"
+        price_df = pd.read_csv(PRICE_PATH)
+        yield_df = pd.read_csv(YIELD_PATH)
 
-    summary = {
-        "price_shape": list(price_df.shape),
-        "yield_weather_shape": list(yw_df.shape),
-    }
-    missing = {
-        "price_missing": price_df.isna().sum().sort_values(ascending=False).head(15).to_dict(),
-        "yield_weather_missing": yw_df.isna().sum().sort_values(ascending=False).head(15).to_dict(),
-    }
-
-    yw_num = yw_df.select_dtypes(include=[np.number]).copy()
-    corr_plot = None
-    if not yw_num.empty:
-        corr = yw_num.corr(numeric_only=True)
-        fig = px.imshow(
-            corr,
-            text_auto=False,
-            title="Yield/Weather Correlation Heatmap",
-            aspect="auto",
-            template="plotly_white",
-        )
-        corr_plot = json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
-
-    importances = {}
-    model = models.get("xgboost")
-    if hasattr(model, "feature_importances_"):
-        importances = {"note": "Feature importance available on transformed feature space."}
-
-    return jsonify(
-        {
-            "summary": summary,
-            "missing": missing,
-            "correlation_plot": corr_plot,
-            "feature_importance": importances,
-            "price_preview": price_df.head(10).to_dict(orient="records"),
-            "yield_weather_preview": yw_df.head(10).to_dict(orient="records"),
-        }
-    )
+    payload = generate_eda_report(price_df, yield_df, diagnostics)
+    payload["mode"] = mode
+    return jsonify(payload)
 
 
 @app.route("/download_predictions", methods=["GET"])
@@ -315,6 +434,13 @@ def download_predictions():
     if not os.path.exists(PRED_PATH):
         return jsonify({"error": "Prediction file not found"}), 404
     return send_file(PRED_PATH, as_attachment=True)
+
+
+@app.route("/download_overview", methods=["GET"])
+def download_overview():
+    if not os.path.exists(OVERVIEW_PATH):
+        return jsonify({"error": "Data overview file not found"}), 404
+    return send_file(OVERVIEW_PATH, as_attachment=True)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,9 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
     f1_score,
+    confusion_matrix,
+    roc_curve,
+    auc,
 )
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
@@ -29,6 +32,7 @@ OUTPUT_DIR = os.path.join(BASE_DIR, "output")
 
 PRICE_PATH = os.path.join(DATA_DIR, "crop_price_dataset.csv")
 YIELD_PATH = os.path.join(DATA_DIR, "Custom_Crops_yield_Historical_Dataset.csv")
+DIAG_PATH = os.path.join(OUTPUT_DIR, "model_diagnostics.json")
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -213,6 +217,7 @@ def train():
 
     metrics_rows = []
     trained_models = {}
+    diagnostics = {"models": {}, "best_model": None}
 
     for name, model in models.items():
         model.fit(X_train_t, y_train)
@@ -228,6 +233,10 @@ def train():
         precision = precision_score(actual_up, pred_up, zero_division=0)
         recall = recall_score(actual_up, pred_up, zero_division=0)
         f1 = f1_score(actual_up, pred_up, zero_division=0)
+        cm = confusion_matrix(actual_up, pred_up, labels=[0, 1]).tolist()
+        score_for_roc = pred - X_test["lag_price_1"].values
+        fpr, tpr, _ = roc_curve(actual_up, score_for_roc)
+        auc_score = auc(fpr, tpr)
 
         metrics_rows.append(
             {
@@ -239,13 +248,47 @@ def train():
                 "Precision": round(float(precision), 4),
                 "Recall": round(float(recall), 4),
                 "F1": round(float(f1), 4),
+                "AUC": round(float(auc_score), 4),
             }
         )
         trained_models[name] = model
+        diagnostics["models"][name] = {
+            "confusion_matrix": cm,
+            "roc_curve": {
+                "fpr": [float(x) for x in fpr],
+                "tpr": [float(x) for x in tpr],
+                "auc": float(auc_score),
+            },
+            "residual_analysis": {
+                "actual": [float(x) for x in y_test.values[:500]],
+                "predicted": [float(x) for x in pred[:500]],
+                "residual": [float(x) for x in (y_test.values - pred)[:500]],
+            },
+        }
+
+        if hasattr(model, "feature_importances_"):
+            raw_importance = model.feature_importances_
+            try:
+                feature_names = preprocessor.get_feature_names_out().tolist()
+            except Exception:
+                feature_names = [f"feature_{i}" for i in range(len(raw_importance))]
+            pairs = sorted(
+                zip(feature_names, raw_importance),
+                key=lambda x: float(x[1]),
+                reverse=True,
+            )[:20]
+            diagnostics["models"][name]["feature_importance"] = [
+                {"feature": str(k), "importance": float(v)} for k, v in pairs
+            ]
 
     metrics_df = pd.DataFrame(metrics_rows).sort_values("RMSE")
     metrics_path = os.path.join(OUTPUT_DIR, "model_metrics.csv")
     metrics_df.to_csv(metrics_path, index=False)
+    diagnostics["best_model"] = str(metrics_df.iloc[0]["model"]) if not metrics_df.empty else None
+    with open(DIAG_PATH, "w", encoding="utf-8") as f:
+        import json
+
+        json.dump(diagnostics, f, ensure_ascii=True, indent=2)
 
     numeric_defaults = train_df[numeric_cols].median(numeric_only=True).to_dict()
     cat_defaults = {
@@ -288,6 +331,7 @@ def train():
     print(f"\nSaved: {os.path.join(MODEL_DIR, 'models.pkl')}")
     print(f"Saved: {os.path.join(MODEL_DIR, 'scaler.pkl')}")
     print(f"Saved: {metrics_path}")
+    print(f"Saved: {DIAG_PATH}")
 
 
 if __name__ == "__main__":

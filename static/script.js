@@ -3,6 +3,14 @@ function getModel() {
 }
 
 let generatedSampleData = [];
+let edaCache = null;
+
+function activateRightTab(tabPanelId) {
+  const tabBtn = document.querySelector(`#rightPanelTabs button[data-bs-target="#${tabPanelId}"]`);
+  if (!tabBtn || typeof bootstrap === "undefined") return;
+  const tab = new bootstrap.Tab(tabBtn);
+  tab.show();
+}
 
 function setDataOverviewAvailability(hasData) {
   const card = document.getElementById("dataOverviewCard");
@@ -17,6 +25,8 @@ function setDataOverviewAvailability(hasData) {
       stateBadge.className = "badge text-bg-secondary";
       stateBadge.innerText = "Hidden";
     }
+    const overviewDownload = document.getElementById("overviewDownloadArea");
+    if (overviewDownload) overviewDownload.innerHTML = "";
     return;
   }
 
@@ -24,6 +34,11 @@ function setDataOverviewAvailability(hasData) {
   if (stateBadge) {
     stateBadge.className = "badge text-bg-success";
     stateBadge.innerText = "Visible";
+  }
+  const overviewDownload = document.getElementById("overviewDownloadArea");
+  if (overviewDownload) {
+    overviewDownload.innerHTML =
+      `<a class="btn btn-outline-primary btn-sm" href="/download_overview">Download Data Overview CSV</a>`;
   }
 }
 
@@ -124,6 +139,8 @@ async function predictManual() {
   document.getElementById("downloadArea").innerHTML = "";
   renderPredictionTable([]);
   renderOverviewData([]);
+  loadMetricsDiagnostics();
+  activateRightTab("predictionPanel");
 }
 
 async function predictCSV() {
@@ -148,6 +165,8 @@ async function predictCSV() {
 
   renderOverviewData(data.input_preview || []);
   renderPredictionTable(data.predictions || data.preview || []);
+  loadMetricsDiagnostics();
+  activateRightTab("predictionPanel");
 }
 
 async function generateSample() {
@@ -162,6 +181,7 @@ async function generateSample() {
   document.getElementById("downloadArea").innerHTML = "";
   renderPredictionTable([]);
   renderOverviewData(data.preview || []);
+  activateRightTab("predictionPanel");
 }
 
 async function predictSampleData() {
@@ -192,25 +212,264 @@ async function predictSampleData() {
   document.getElementById("downloadArea").innerHTML =
     `<a class="btn btn-outline-primary btn-sm" href="${data.download_url}">Download Predictions CSV</a>`;
   renderPredictionTable(data.predictions || data.preview || []);
+  loadMetricsDiagnostics();
+  activateRightTab("predictionPanel");
 }
 
 async function loadEDA() {
-  const res = await fetch("/eda");
-  const data = await res.json();
+  try {
+    activateRightTab("edaPanel");
+    const priceFile = document.getElementById("edaPriceFile")?.files?.[0];
+    const yieldFile = document.getElementById("edaYieldFile")?.files?.[0];
+    const formData = new FormData();
+    if (priceFile) formData.append("price_file", priceFile);
+    if (yieldFile) formData.append("yield_file", yieldFile);
 
-  const summary = {
-    summary: data.summary,
-    missing: data.missing
-  };
-  document.getElementById("edaSummary").innerText = JSON.stringify(summary, null, 2);
-
-  if (data.correlation_plot) {
-    const fig = JSON.parse(data.correlation_plot);
-    Plotly.newPlot("corrPlot", fig.data, fig.layout);
+    const res = await fetch("/eda_analysis", {
+      method: "POST",
+      body: formData
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || "Failed to load EDA");
+    }
+    edaCache = data;
+    renderEdaDashboard(data);
+  } catch (err) {
+    const el = document.getElementById("edaOverviewText");
+    if (el) el.innerText = `EDA load error: ${err.message}`;
   }
+}
+
+function plotFromJson(targetId, jsonStr) {
+  const el = document.getElementById(targetId);
+  if (!el) return;
+  if (!jsonStr) {
+    if (typeof Plotly !== "undefined") Plotly.purge(el);
+    el.innerHTML = "";
+    return;
+  }
+  const fig = JSON.parse(jsonStr);
+  if (typeof Plotly !== "undefined") {
+    Plotly.react(el, fig.data || [], fig.layout || {}, { responsive: true });
+  }
+}
+
+function renderEdaDashboard(data) {
+  const o = data.overview || {};
+  const overviewText = {
+    mode: data.mode || "combined",
+    rows_cols: `Price: ${o.price_rows || 0}x${o.price_cols || 0}, Yield/Weather: ${o.yield_rows || 0}x${o.yield_cols || 0}`,
+    missing_values_count: o.missing_values_count,
+    duplicate_rows_count: o.duplicate_rows_count,
+    date_range: o.date_range,
+    unique_crops: o.unique_crops,
+    unique_states_markets: o.unique_states_markets,
+    analyst_note: o.analyst_note
+  };
+  const overviewEl = document.getElementById("edaOverviewText");
+  if (overviewEl) overviewEl.innerText = JSON.stringify(overviewText, null, 2);
+
+  const c = data.charts || {};
+  plotFromJson("edaMissingPlot", c.missing_values);
+  plotFromJson("edaPriceHist", c.price_histogram);
+  plotFromJson("edaPriceBox", c.price_boxplot);
+  plotFromJson("edaSeasonalTrend", c.seasonal_trend);
+  plotFromJson("edaCropTop", c.crop_price_top);
+  plotFromJson("edaCropLow", c.crop_price_low);
+  plotFromJson("edaStatePrice", c.state_price);
+  plotFromJson("edaYieldPrice", c.yield_vs_price);
+  plotFromJson("edaRainPrice", c.rainfall_vs_price);
+  plotFromJson("edaTempPrice", c.temperature_vs_price);
+  plotFromJson("edaHumPrice", c.humidity_vs_price);
+  plotFromJson("edaCorr", c.correlation);
+  plotFromJson("edaOutliers", c.outliers);
+
+  const insightsEl = document.getElementById("edaInsights");
+  if (insightsEl) {
+    insightsEl.innerHTML = "";
+    (data.insights || []).forEach((x) => {
+      const li = document.createElement("li");
+      li.innerText = x;
+      insightsEl.appendChild(li);
+    });
+  }
+
+  const modelSelect = document.getElementById("edaFeatureModel");
+  if (modelSelect) {
+    modelSelect.innerHTML = "";
+    Object.keys(data.feature_importance || {}).forEach((m) => {
+      const opt = document.createElement("option");
+      opt.value = m;
+      opt.innerText = m.toUpperCase();
+      modelSelect.appendChild(opt);
+    });
+  }
+  updateFeatureImportance();
+}
+
+function updateFeatureImportance() {
+  if (!edaCache) return;
+  const modelName = document.getElementById("edaFeatureModel")?.value;
+  const figJson = edaCache?.feature_importance?.[modelName];
+  if (figJson) plotFromJson("edaFeatureImportance", figJson);
+
+  const residual = edaCache?.residual_analysis?.[modelName];
+  if (residual) {
+    plotFromJson("edaResidualScatter", residual.actual_vs_pred);
+    plotFromJson("edaResidualHist", residual.residual_hist);
+  }
+}
+
+function renderMetricsDiagnostics(diag) {
+  if (!diag || !diag.models || !Object.keys(diag.models).length) {
+    const cmEl = document.getElementById("confusionMatrixPlot");
+    const rocEl = document.getElementById("rocAucPlot");
+    if (cmEl) cmEl.innerHTML = `<div class="text-muted small">Confusion matrix is available when the current input has actual target values.</div>`;
+    if (rocEl) rocEl.innerHTML = `<div class="text-muted small">ROC/AUC is available when the current input has actual target values.</div>`;
+    return;
+  }
+
+  const modelKeys = Object.keys(diag.models || {});
+  const bestModel = diag.best_model || (modelKeys.length ? modelKeys[0] : null);
+  const best = bestModel ? diag.models[bestModel] : null;
+  if (best && best.confusion_matrix) {
+    const cm = best.confusion_matrix;
+    const cmFig = {
+      data: [
+        {
+          z: cm,
+          x: ["Pred Down", "Pred Up"],
+          y: ["Actual Down", "Actual Up"],
+          type: "heatmap",
+          colorscale: "Blues",
+          text: cm,
+          texttemplate: "%{text}",
+          showscale: true
+        }
+      ],
+      layout: {
+        title: `Confusion Matrix - ${bestModel.toUpperCase()}`,
+        margin: { t: 50, l: 70, r: 20, b: 50 }
+      }
+    };
+    Plotly.newPlot("confusionMatrixPlot", cmFig.data, cmFig.layout);
+  }
+
+  const rocTraces = [];
+  Object.entries(diag.models).forEach(([modelName, modelData]) => {
+    const roc = modelData.roc_curve;
+    if (!roc || !roc.fpr || !roc.tpr) return;
+    rocTraces.push({
+      x: roc.fpr,
+      y: roc.tpr,
+      mode: "lines",
+      type: "scatter",
+      name: `${modelName.toUpperCase()} (AUC=${Number(roc.auc).toFixed(3)})`
+    });
+  });
+  rocTraces.push({
+    x: [0, 1],
+    y: [0, 1],
+    mode: "lines",
+    type: "scatter",
+    name: "Random",
+    line: { dash: "dash", color: "#6b7280" }
+  });
+  if (rocTraces.length > 1) {
+    Plotly.newPlot(
+      "rocAucPlot",
+      rocTraces,
+      {
+        title: "ROC Curves",
+        xaxis: { title: "False Positive Rate" },
+        yaxis: { title: "True Positive Rate" },
+        margin: { t: 50, l: 60, r: 20, b: 60 }
+      }
+    );
+  }
+}
+
+function renderMetricsTable(rows, source) {
+  const tbody = document.getElementById("metricsBody");
+  if (!tbody) return;
+  const sourceEl = document.getElementById("metricsSourceText");
+  const noteEl = document.getElementById("metricsNoteText");
+  if (sourceEl) sourceEl.innerText = `Source: ${source || "N/A"}`;
+
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) {
+    tbody.innerHTML = `<tr><td colspan="9" class="text-muted">Run a prediction to view metrics for the current website input.</td></tr>`;
+    if (noteEl) noteEl.innerText = "";
+    return;
+  }
+
+  const hasActual = list.some((r) => r.MAE !== null && r.MAE !== undefined);
+  if (noteEl) {
+    noteEl.innerText = hasActual
+      ? "Metrics are computed from the current input data."
+      : "No actual target price found in current input; showing prediction-only summary.";
+  }
+
+  const fmt = (v) => (v === null || v === undefined || Number.isNaN(v) ? "-" : v);
+  tbody.innerHTML = list
+    .map(
+      (r) => `<tr>
+      <td>${r.model ?? ""}</td>
+      <td>${fmt(r.MAE)}</td>
+      <td>${fmt(r.RMSE)}</td>
+      <td>${fmt(r.R2)}</td>
+      <td>${fmt(r.Accuracy)}</td>
+      <td>${fmt(r.Precision)}</td>
+      <td>${fmt(r.Recall)}</td>
+      <td>${fmt(r.F1)}</td>
+      <td>${fmt(r.AvgPredPrice)}</td>
+    </tr>`
+    )
+    .join("");
+}
+
+async function loadMetricsDiagnostics() {
+  try {
+    const res = await fetch("/metrics");
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || "Failed to load metrics diagnostics");
+    }
+    renderMetricsTable(data.metrics || [], data.source);
+    renderMetricsDiagnostics(data.diagnostics || {});
+  } catch (err) {
+    const cm = document.getElementById("confusionMatrixPlot");
+    const roc = document.getElementById("rocAucPlot");
+    if (cm) cm.innerHTML = `<div class="text-danger small">Confusion matrix load error: ${err.message}</div>`;
+    if (roc) roc.innerHTML = `<div class="text-danger small">ROC/AUC load error: ${err.message}</div>`;
+    renderMetricsTable([], "Error loading metrics");
+  }
+}
+
+function initEdaPlaceholders() {
+  const overviewEl = document.getElementById("edaOverviewText");
+  if (overviewEl) {
+    overviewEl.innerText = "Click 'Run EDA' to generate charts for selected datasets.";
+  }
+  [
+    "edaMissingPlot", "edaPriceHist", "edaPriceBox", "edaSeasonalTrend", "edaCropTop", "edaCropLow",
+    "edaStatePrice", "edaYieldPrice", "edaRainPrice", "edaTempPrice", "edaHumPrice",
+    "edaCorr", "edaOutliers", "edaFeatureImportance", "edaResidualScatter", "edaResidualHist"
+  ].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) {
+      if (typeof Plotly !== "undefined") Plotly.purge(el);
+      el.innerHTML = "";
+    }
+  });
+  const insightsEl = document.getElementById("edaInsights");
+  if (insightsEl) insightsEl.innerHTML = "";
 }
 
 document.addEventListener("DOMContentLoaded", () => {
   setDataOverviewAvailability(false);
   syncOverviewToggleText();
+  loadMetricsDiagnostics();
+  initEdaPlaceholders();
 });
