@@ -22,6 +22,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.ensemble import VotingRegressor, RandomForestRegressor
+from sklearn.svm import SVR
 from scipy import sparse
 
 warnings.filterwarnings("ignore")
@@ -74,6 +75,23 @@ BEST_CATBOOST_PARAMS = {
     "verbose": 0,
 }
 
+BEST_RF_PARAMS = {
+    "n_estimators": 800,
+    "max_depth": 18,
+    "min_samples_split": 4,
+    "min_samples_leaf": 2,
+    "max_features": "sqrt",
+    "random_state": 42,
+    "n_jobs": -1,
+}
+
+BEST_SVR_PARAMS = {
+    "kernel": "rbf",
+    "C": 90.0,
+    "epsilon": 0.06,
+    "gamma": "scale",
+}
+
 CATBOOST_SEARCH_SPACE = {
     "iterations": [300, 500, 700, 900],
     "depth": [4, 5, 6, 7, 8],
@@ -81,6 +99,21 @@ CATBOOST_SEARCH_SPACE = {
     "l2_leaf_reg": [3.0, 5.0, 7.0, 10.0],
     "bagging_temperature": [0.0, 0.5, 1.0, 2.0],
     "random_strength": [0.0, 0.5, 1.0, 2.0],
+}
+
+RF_SEARCH_SPACE = {
+    "n_estimators": [400, 600, 800, 1000],
+    "max_depth": [10, 14, 18, 24, None],
+    "min_samples_split": [2, 4, 6, 8],
+    "min_samples_leaf": [1, 2, 4],
+    "max_features": ["sqrt", "log2", None],
+}
+
+SVR_SEARCH_SPACE = {
+    "C": [10.0, 30.0, 50.0, 70.0, 90.0, 120.0],
+    "epsilon": [0.01, 0.03, 0.06, 0.1, 0.2],
+    "gamma": ["scale", "auto"],
+    "kernel": ["rbf"],
 }
 
 
@@ -269,11 +302,45 @@ def train():
             ("lgbm", lgbm),
         ]
     )
+    random_forest = RandomForestRegressor(**BEST_RF_PARAMS)
+    svr = SVR(**BEST_SVR_PARAMS)
+
+    tscv = TimeSeriesSplit(n_splits=4)
+    rf_search = RandomizedSearchCV(
+        estimator=random_forest,
+        param_distributions=RF_SEARCH_SPACE,
+        n_iter=20,
+        scoring="neg_root_mean_squared_error",
+        cv=tscv,
+        n_jobs=-1,
+        random_state=42,
+        verbose=0,
+    )
+    rf_search.fit(X_train_t, y_train)
+    random_forest = rf_search.best_estimator_
+    print(f"Tuned RandomForest best params: {rf_search.best_params_}")
+
+    X_train_dense = X_train_t.toarray() if sparse.issparse(X_train_t) else X_train_t
+    svr_search = RandomizedSearchCV(
+        estimator=svr,
+        param_distributions=SVR_SEARCH_SPACE,
+        n_iter=16,
+        scoring="neg_root_mean_squared_error",
+        cv=tscv,
+        n_jobs=-1,
+        random_state=42,
+        verbose=0,
+    )
+    svr_search.fit(X_train_dense, y_train)
+    svr = svr_search.best_estimator_
+    print(f"Tuned SVR best params: {svr_search.best_params_}")
 
     models = {
         "xgboost": xgb,
         "lightgbm": lgbm,
         "catboost": catboost_model,
+        "random_forest": random_forest,
+        "svr": svr,
         "ensemble": ensemble,
     }
 
@@ -282,8 +349,9 @@ def train():
     diagnostics = {"models": {}, "best_model": None}
 
     for name, model in models.items():
-        X_train_model = X_train_t.toarray() if (name == "catboost" and sparse.issparse(X_train_t)) else X_train_t
-        X_test_model = X_test_t.toarray() if (name == "catboost" and sparse.issparse(X_test_t)) else X_test_t
+        needs_dense = name in {"catboost", "svr"}
+        X_train_model = X_train_t.toarray() if (needs_dense and sparse.issparse(X_train_t)) else X_train_t
+        X_test_model = X_test_t.toarray() if (needs_dense and sparse.issparse(X_test_t)) else X_test_t
         model.fit(X_train_model, y_train)
         pred = model.predict(X_test_model)
         mae = mean_absolute_error(y_test, pred)

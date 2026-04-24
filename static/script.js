@@ -339,81 +339,17 @@ function updateFeatureImportance() {
   if (residual) {
     plotFromJson("edaResidualScatter", residual.actual_vs_pred);
     plotFromJson("edaResidualHist", residual.residual_hist);
-  }
-}
-
-function renderMetricsDiagnostics(diag, selectedModel) {
-  if (!diag || !diag.models || !Object.keys(diag.models).length) {
-    const cmEl = document.getElementById("confusionMatrixPlot");
-    const rocEl = document.getElementById("rocAucPlot");
-    if (cmEl) cmEl.innerHTML = `<div class="text-muted small">Confusion matrix is available when the current input has actual target values.</div>`;
-    if (rocEl) rocEl.innerHTML = `<div class="text-muted small">ROC/AUC is available when the current input has actual target values.</div>`;
-    return;
-  }
-
-  const modelKeys = Object.keys(diag.models || {});
-  const chosenModel = (selectedModel && diag.models[selectedModel]) ? selectedModel : (diag.best_model || modelKeys[0]);
-  const best = chosenModel ? diag.models[chosenModel] : null;
-  if (best && best.confusion_matrix) {
-    const cm = best.confusion_matrix;
-    const cmFig = {
-      data: [
-        {
-          z: cm,
-          x: ["Pred Down", "Pred Up"],
-          y: ["Actual Down", "Actual Up"],
-          type: "heatmap",
-          colorscale: "Blues",
-          text: cm,
-          texttemplate: "%{text}",
-          showscale: true
-        }
-      ],
-      layout: {
-        title: `Confusion Matrix - ${chosenModel.toUpperCase()}`,
-        margin: { t: 50, l: 70, r: 20, b: 50 },
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'Inter, sans-serif' }
-      }
-    };
-    Plotly.newPlot("confusionMatrixPlot", cmFig.data, cmFig.layout);
-  }
-
-  const rocTraces = [];
-  const chosenDiag = chosenModel ? diag.models[chosenModel] : null;
-  const roc = chosenDiag ? chosenDiag.roc_curve : null;
-  if (roc && roc.fpr && roc.tpr) {
-    rocTraces.push({
-      x: roc.fpr,
-      y: roc.tpr,
-      mode: "lines",
-      type: "scatter",
-      name: `${chosenModel.toUpperCase()} (AUC=${Number(roc.auc).toFixed(3)})`
-    });
-  }
-  rocTraces.push({
-    x: [0, 1],
-    y: [0, 1],
-    mode: "lines",
-    type: "scatter",
-    name: "Random",
-    line: { dash: "dash", color: "#6b7280" }
-  });
-  if (rocTraces.length > 1) {
-    Plotly.newPlot(
-      "rocAucPlot",
-      rocTraces,
-      {
-        title: `ROC Curve - ${chosenModel.toUpperCase()}`,
-        xaxis: { title: "False Positive Rate" },
-        yaxis: { title: "True Positive Rate" },
-        margin: { t: 50, l: 60, r: 20, b: 60 },
-        paper_bgcolor: 'rgba(0,0,0,0)',
-        plot_bgcolor: 'rgba(0,0,0,0)',
-        font: { family: 'Inter, sans-serif' }
-      }
-    );
+  } else {
+    const scatterEl = document.getElementById("edaResidualScatter");
+    const histEl = document.getElementById("edaResidualHist");
+    if (scatterEl) {
+      if (typeof Plotly !== "undefined") Plotly.purge(scatterEl);
+      scatterEl.innerHTML = `<div class="text-muted small">Residual chart is not available for this model.</div>`;
+    }
+    if (histEl) {
+      if (typeof Plotly !== "undefined") Plotly.purge(histEl);
+      histEl.innerHTML = `<div class="text-muted small">Residual distribution is not available for this model.</div>`;
+    }
   }
 }
 
@@ -424,12 +360,12 @@ function renderMetricsTable(rows, source, selectedModel) {
   const noteEl = document.getElementById("metricsNoteText");
   const titleEl = document.getElementById("metricsTitle");
   if (sourceEl) sourceEl.innerText = `Source: ${source || "N/A"}`;
-  if (titleEl) titleEl.innerText = `Model Metrics${selectedModel ? ` - ${String(selectedModel).toUpperCase()}` : ""}`;
+  if (titleEl) titleEl.innerText = "Model Metrics (All Models)";
 
   const allRows = Array.isArray(rows) ? rows : [];
-  const list = selectedModel ? allRows.filter((r) => String(r.model).toLowerCase() === String(selectedModel).toLowerCase()) : allRows;
+  const list = allRows;
   if (!list.length) {
-    tbody.innerHTML = `<tr><td colspan="9" class="text-muted">No metrics available for selected model yet. Run prediction first.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="4" class="text-muted">No metrics available yet. Run training first.</td></tr>`;
     if (noteEl) noteEl.innerText = "";
     return;
   }
@@ -444,14 +380,87 @@ function renderMetricsTable(rows, source, selectedModel) {
       <td>${fmt(r.MAE)}</td>
       <td>${fmt(r.RMSE)}</td>
       <td>${fmt(r.R2)}</td>
-      <td>${fmt(r.Accuracy)}</td>
-      <td>${fmt(r.Precision)}</td>
-      <td>${fmt(r.Recall)}</td>
-      <td>${fmt(r.F1)}</td>
-      <td>${fmt(r.AUC)}</td>
     </tr>`
     )
     .join("");
+}
+
+function renderMetricsComparisonCharts(rows) {
+  const errorEl = document.getElementById("metricsErrorChart");
+  const r2El = document.getElementById("metricsR2Chart");
+  if (!errorEl || !r2El) return;
+
+  const list = (Array.isArray(rows) ? rows : [])
+    .map((r) => ({
+      model: String(r.model ?? "").toUpperCase(),
+      MAE: Number(r.MAE),
+      RMSE: Number(r.RMSE),
+      R2: Number(r.R2),
+    }))
+    .filter((r) => Number.isFinite(r.MAE) && Number.isFinite(r.RMSE) && Number.isFinite(r.R2))
+    .sort((a, b) => a.RMSE - b.RMSE);
+
+  if (!list.length) {
+    errorEl.innerHTML = `<div class="text-muted small">No chart data available.</div>`;
+    r2El.innerHTML = `<div class="text-muted small">No chart data available.</div>`;
+    return;
+  }
+
+  const models = list.map((r) => r.model);
+
+  Plotly.react(
+    "metricsErrorChart",
+    [
+      {
+        y: models,
+        x: list.map((r) => r.MAE),
+        type: "bar",
+        orientation: "h",
+        name: "MAE",
+        marker: { color: "#0d6efd" },
+      },
+      {
+        y: models,
+        x: list.map((r) => r.RMSE),
+        type: "bar",
+        orientation: "h",
+        name: "RMSE",
+        marker: { color: "#fd7e14" },
+      },
+    ],
+    {
+      barmode: "group",
+      margin: { t: 20, l: 95, r: 20, b: 40 },
+      xaxis: { title: "Error (Lower is better)" },
+      yaxis: { automargin: true },
+      paper_bgcolor: "rgba(0,0,0,0)",
+      plot_bgcolor: "rgba(0,0,0,0)",
+      legend: { orientation: "h", y: 1.12 },
+    },
+    { responsive: true }
+  );
+
+  Plotly.react(
+    "metricsR2Chart",
+    [
+      {
+        x: models,
+        y: list.map((r) => r.R2),
+        type: "bar",
+        marker: { color: "#198754" },
+        text: list.map((r) => r.R2.toFixed(3)),
+        textposition: "outside",
+      },
+    ],
+    {
+      margin: { t: 20, l: 45, r: 15, b: 95 },
+      xaxis: { tickangle: -25 },
+      yaxis: { title: "R2 (Higher is better)", range: [0, 1] },
+      paper_bgcolor: "rgba(0,0,0,0)",
+      plot_bgcolor: "rgba(0,0,0,0)",
+    },
+    { responsive: true }
+  );
 }
 
 async function loadMetricsDiagnostics() {
@@ -468,21 +477,18 @@ async function loadMetricsDiagnostics() {
     };
     const selectedModel = getModel();
     renderMetricsTable(latestMetricsPayload.metrics, latestMetricsPayload.source, selectedModel);
-    renderMetricsDiagnostics(latestMetricsPayload.diagnostics, selectedModel);
+    renderMetricsComparisonCharts(latestMetricsPayload.metrics);
   } catch (err) {
-    const cm = document.getElementById("confusionMatrixPlot");
-    const roc = document.getElementById("rocAucPlot");
-    if (cm) cm.innerHTML = `<div class="text-danger small">Confusion matrix load error: ${err.message}</div>`;
-    if (roc) roc.innerHTML = `<div class="text-danger small">ROC/AUC load error: ${err.message}</div>`;
     latestMetricsPayload = { metrics: [], diagnostics: {}, source: "Error loading metrics" };
     renderMetricsTable([], "Error loading metrics", getModel());
+    renderMetricsComparisonCharts([]);
   }
 }
 
 function refreshMetricsForSelectedModel() {
   const selectedModel = getModel();
   renderMetricsTable(latestMetricsPayload.metrics || [], latestMetricsPayload.source || "N/A", selectedModel);
-  renderMetricsDiagnostics(latestMetricsPayload.diagnostics || {}, selectedModel);
+  renderMetricsComparisonCharts(latestMetricsPayload.metrics || []);
 }
 
 function initEdaPlaceholders() {

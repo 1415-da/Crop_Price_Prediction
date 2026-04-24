@@ -168,6 +168,35 @@ def generate_eda_report(price_df: pd.DataFrame, yw_df: pd.DataFrame, diagnostics
                 fi_df = pd.DataFrame(model_data["feature_importance"]).head(12)
                 fi_fig = px.bar(fi_df.sort_values("importance"), x="importance", y="feature", orientation="h", title=f"{model_name.upper()} Feature Importance", template="plotly_white")
                 feature_importance[model_name] = _fig_json(fi_fig)
+            else:
+                # Some estimators (for example SVR) do not expose native feature_importances_.
+                # Keep model visible in EDA dropdown with a clear explanatory chart.
+                fi_fig = go.Figure()
+                fi_fig.add_annotation(
+                    text=f"{model_name.upper()} does not provide native feature importance.",
+                    x=0.5,
+                    y=0.55,
+                    xref="paper",
+                    yref="paper",
+                    showarrow=False,
+                    font={"size": 14},
+                )
+                fi_fig.add_annotation(
+                    text="Use permutation importance/SHAP for model-agnostic explanation.",
+                    x=0.5,
+                    y=0.42,
+                    xref="paper",
+                    yref="paper",
+                    showarrow=False,
+                    font={"size": 12, "color": "#6b7280"},
+                )
+                fi_fig.update_layout(
+                    title=f"{model_name.upper()} Feature Importance",
+                    template="plotly_white",
+                    xaxis={"visible": False},
+                    yaxis={"visible": False},
+                )
+                feature_importance[model_name] = _fig_json(fi_fig)
             if model_data.get("residual_analysis"):
                 r = model_data["residual_analysis"]
                 act_pred = px.scatter(x=r["actual"], y=r["predicted"], labels={"x": "Actual", "y": "Predicted"}, title=f"{model_name.upper()} Actual vs Predicted", template="plotly_white")

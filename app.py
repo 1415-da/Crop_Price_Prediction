@@ -58,6 +58,103 @@ cat_defaults = artifacts["cat_defaults"]
 runtime_metrics_rows = []
 runtime_diagnostics = {"models": {}, "best_model": None}
 runtime_source = "No input evaluated yet."
+MODEL_DISPLAY_ORDER = ["xgboost", "lightgbm", "catboost", "random_forest", "svr", "ensemble"]
+COLUMN_DESCRIPTIONS = {
+    "crop_price_dataset.csv": {
+        "month": {
+            "description": "Month/date of market observation.",
+            "role": "Input/Context",
+        },
+        "commodity_name": {
+            "description": "Crop/commodity name sold in mandi.",
+            "role": "Feature",
+        },
+        "avg_modal_price": {
+            "description": "Target price; average modal mandi price.",
+            "role": "Target",
+        },
+        "avg_min_price": {
+            "description": "Average minimum mandi price in that period.",
+            "role": "Input/Context",
+        },
+        "avg_max_price": {
+            "description": "Average maximum mandi price in that period.",
+            "role": "Input/Context",
+        },
+        "state_name": {
+            "description": "State where mandi price is recorded.",
+            "role": "Feature",
+        },
+        "district_name": {
+            "description": "District/market region for the record.",
+            "role": "Input/Context",
+        },
+        "calculationType": {
+            "description": "Aggregation type used to compute value (for example Monthly).",
+            "role": "Input/Context",
+        },
+        "change": {
+            "description": "Price change versus previous period.",
+            "role": "Input/Context",
+        },
+    },
+    "Custom_Crops_yield_Historical_Dataset.csv": {
+        "Dist Code": {"description": "District code identifier.", "role": "Input/Context"},
+        "Year": {"description": "Agricultural year of observation.", "role": "Input/Context"},
+        "State Code": {"description": "State code identifier.", "role": "Input/Context"},
+        "State Name": {"description": "State name.", "role": "Input/Context"},
+        "Dist Name": {"description": "District name.", "role": "Input/Context"},
+        "Crop": {"description": "Crop name in yield/weather dataset.", "role": "Input/Context"},
+        "Area_ha": {"description": "Area cultivated (hectares).", "role": "Feature"},
+        "Yield_kg_per_ha": {"description": "Crop yield per hectare.", "role": "Feature"},
+        "N_req_kg_per_ha": {"description": "Nitrogen requirement per hectare.", "role": "Input/Context"},
+        "P_req_kg_per_ha": {"description": "Phosphorus requirement per hectare.", "role": "Input/Context"},
+        "K_req_kg_per_ha": {"description": "Potassium requirement per hectare.", "role": "Input/Context"},
+        "Total_N_kg": {"description": "Total nitrogen requirement for cultivated area.", "role": "Input/Context"},
+        "Total_P_kg": {"description": "Total phosphorus requirement for cultivated area.", "role": "Input/Context"},
+        "Total_K_kg": {"description": "Total potassium requirement for cultivated area.", "role": "Input/Context"},
+        "Temperature_C": {"description": "Average temperature in Celsius.", "role": "Feature"},
+        "Humidity_%": {"description": "Average relative humidity percentage.", "role": "Feature"},
+        "pH": {"description": "Soil pH value.", "role": "Input/Context"},
+        "Rainfall_mm": {"description": "Rainfall in millimeters.", "role": "Feature"},
+        "Wind_Speed_m_s": {"description": "Wind speed in meters per second.", "role": "Input/Context"},
+        "Solar_Radiation_MJ_m2_day": {"description": "Solar radiation intensity (MJ/m2/day).", "role": "Input/Context"},
+    },
+}
+CALCULATED_TYPES = [
+    {
+        "column": "season",
+        "calculation": "Mapped from month number: 3-6=Kharif, 7-10=Monsoon, 11-2=Rabi.",
+    },
+    {
+        "column": "year",
+        "calculation": "Extracted from month/date column (datetime year).",
+    },
+    {
+        "column": "month_num",
+        "calculation": "Extracted from month/date column (datetime month).",
+    },
+    {
+        "column": "lag_price_1",
+        "calculation": "Previous period modal price per commodity_name + state_name group.",
+    },
+    {
+        "column": "lag_price_3",
+        "calculation": "3-period lag modal price per commodity_name + state_name group.",
+    },
+    {
+        "column": "rolling_price_3",
+        "calculation": "Shifted rolling mean of last 3 modal prices within commodity_name + state_name group.",
+    },
+    {
+        "column": "production_proxy",
+        "calculation": "area_ha * yield_kg_per_ha.",
+    },
+    {
+        "column": "supply_proxy",
+        "calculation": "production_proxy normalized by max absolute production_proxy.",
+    },
+]
 
 
 def prepare_input_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -104,6 +201,31 @@ def prepare_input_df(df: pd.DataFrame) -> pd.DataFrame:
     return df[feature_cols]
 
 
+def get_available_model_names():
+    model_keys = list(models.keys())
+    ordered = [m for m in MODEL_DISPLAY_ORDER if m in model_keys]
+    remaining = sorted([m for m in model_keys if m not in ordered])
+    return ordered + remaining
+
+
+def resolve_model(model_name: str):
+    aliases = {
+        "randomforest": "random_forest",
+        "random_forest_regressor": "random_forest",
+        "rf": "random_forest",
+        "support_vector_regressor": "svr",
+        "svm": "svr",
+    }
+    key = str(model_name or "").strip().lower().replace(" ", "_")
+    key = aliases.get(key, key)
+
+    default_key = "ensemble" if "ensemble" in models else (next(iter(models.keys())) if models else None)
+    chosen_key = key if key in models else default_key
+    if chosen_key is None:
+        raise ValueError("No trained models are available.")
+    return chosen_key, models[chosen_key]
+
+
 def get_metrics_df():
     if os.path.exists(METRICS_PATH):
         return pd.read_csv(METRICS_PATH)
@@ -131,50 +253,60 @@ def _plotly_div_from_json(fig_json: str) -> str:
 
 
 def _write_metrics_html_report(metrics_df: pd.DataFrame, diagnostics: dict, source: str) -> str:
+    metrics_df = metrics_df.copy()
+    for col in ["MAE", "RMSE", "R2"]:
+        if col in metrics_df.columns:
+            metrics_df[col] = pd.to_numeric(metrics_df[col], errors="coerce")
+    if "RMSE" in metrics_df.columns:
+        metrics_df = metrics_df.sort_values("RMSE", na_position="last")
+
     rows = metrics_df.to_dict(orient="records")
     table_rows = "".join(
         f"<tr><td>{escape(str(r.get('model', '')))}</td>"
         f"<td>{escape(str(r.get('MAE', '-')))}</td>"
         f"<td>{escape(str(r.get('RMSE', '-')))}</td>"
-        f"<td>{escape(str(r.get('R2', '-')))}</td>"
-        f"<td>{escape(str(r.get('Accuracy', '-')))}</td>"
-        f"<td>{escape(str(r.get('Precision', '-')))}</td>"
-        f"<td>{escape(str(r.get('Recall', '-')))}</td>"
-        f"<td>{escape(str(r.get('F1', '-')))}</td>"
-        f"<td>{escape(str(r.get('AUC', '-')))}</td></tr>"
+        f"<td>{escape(str(r.get('R2', '-')))}</td></tr>"
         for r in rows
     )
 
-    cm_div = "<p>No confusion matrix available.</p>"
-    roc_div = "<p>No ROC/AUC chart available.</p>"
-    model_keys = list((diagnostics or {}).get("models", {}).keys())
-    chosen = (diagnostics or {}).get("best_model") or (model_keys[0] if model_keys else None)
-    if chosen:
-        chosen_diag = diagnostics["models"].get(chosen, {})
-        cm = chosen_diag.get("confusion_matrix")
-        roc = chosen_diag.get("roc_curve")
-        if cm:
-            cm_fig = {
-                "data": [{
-                    "z": cm,
-                    "x": ["Pred Down", "Pred Up"],
-                    "y": ["Actual Down", "Actual Up"],
-                    "type": "heatmap",
-                    "colorscale": "Blues",
-                    "showscale": True,
-                }],
-                "layout": {"title": f"Confusion Matrix - {chosen.upper()}"}
-            }
-            cm_div = pio.to_html(cm_fig, include_plotlyjs=False, full_html=False)
-        if roc and roc.get("fpr") and roc.get("tpr"):
-            roc_fig = {
-                "data": [
-                    {"x": roc["fpr"], "y": roc["tpr"], "mode": "lines", "type": "scatter", "name": f"{chosen.upper()} (AUC={roc.get('auc', 0):.3f})"},
-                    {"x": [0, 1], "y": [0, 1], "mode": "lines", "type": "scatter", "name": "Random", "line": {"dash": "dash"}},
-                ],
-                "layout": {"title": "ROC Curve", "xaxis": {"title": "FPR"}, "yaxis": {"title": "TPR"}}
-            }
-            roc_div = pio.to_html(roc_fig, include_plotlyjs=False, full_html=False)
+    error_div = "<p>No error-comparison chart available.</p>"
+    r2_div = "<p>No R2 chart available.</p>"
+    chart_df = metrics_df.dropna(subset=["MAE", "RMSE", "R2"], how="any") if not metrics_df.empty else pd.DataFrame()
+    if not chart_df.empty:
+        models_u = [str(x).upper() for x in chart_df["model"].tolist()]
+        error_fig = {
+            "data": [
+                {"y": models_u, "x": chart_df["MAE"].tolist(), "type": "bar", "orientation": "h", "name": "MAE", "marker": {"color": "#0d6efd"}},
+                {"y": models_u, "x": chart_df["RMSE"].tolist(), "type": "bar", "orientation": "h", "name": "RMSE", "marker": {"color": "#fd7e14"}},
+            ],
+            "layout": {
+                "title": "Error Comparison (MAE vs RMSE)",
+                "barmode": "group",
+                "xaxis": {"title": "Error (Lower is better)"},
+                "yaxis": {"automargin": True},
+                "margin": {"t": 60, "l": 90, "r": 20, "b": 45},
+            },
+        }
+        r2_fig = {
+            "data": [
+                {
+                    "x": models_u,
+                    "y": chart_df["R2"].tolist(),
+                    "type": "bar",
+                    "marker": {"color": "#198754"},
+                    "text": [f"{v:.3f}" if pd.notna(v) else "-" for v in chart_df["R2"].tolist()],
+                    "textposition": "outside",
+                }
+            ],
+            "layout": {
+                "title": "R2 Comparison",
+                "xaxis": {"tickangle": -25},
+                "yaxis": {"title": "R2 (Higher is better)", "range": [0, 1]},
+                "margin": {"t": 60, "l": 55, "r": 20, "b": 95},
+            },
+        }
+        error_div = pio.to_html(error_fig, include_plotlyjs=False, full_html=False, config={"responsive": True})
+        r2_div = pio.to_html(r2_fig, include_plotlyjs=False, full_html=False, config={"responsive": True})
 
     html = f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>Metrics Report</title>
@@ -184,11 +316,11 @@ def _write_metrics_html_report(metrics_df: pd.DataFrame, diagnostics: dict, sour
 <h2>Model Metrics Report</h2>
 <p><strong>Source:</strong> {escape(source or 'N/A')}</p>
 <table>
-<thead><tr><th>Model</th><th>MAE</th><th>RMSE</th><th>R2</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>F1</th><th>AUC</th></tr></thead>
+<thead><tr><th>Model</th><th>MAE</th><th>RMSE</th><th>R2</th></tr></thead>
 <tbody>{table_rows}</tbody>
 </table>
-<h3 style="margin-top:24px;">Confusion Matrix</h3>{cm_div}
-<h3 style="margin-top:24px;">ROC / AUC</h3>{roc_div}
+<h3 style="margin-top:24px;">Error Comparison</h3>{error_div}
+<h3 style="margin-top:24px;">R2 Comparison</h3>{r2_div}
 </body></html>"""
     with open(METRICS_REPORT_HTML_PATH, "w", encoding="utf-8") as f:
         f.write(html)
@@ -216,6 +348,17 @@ def _write_eda_html_report(payload: dict) -> str:
         f"<h3 style='margin-top:24px'>{escape(title)}</h3>{_plotly_div_from_json(fig_json)}"
         for title, fig_json in sections
     )
+    fi_blocks = "".join(
+        f"<h4 style='margin-top:18px'>{escape(str(model_name).upper())}</h4>{_plotly_div_from_json(fig_json)}"
+        for model_name, fig_json in (payload.get("feature_importance", {}) or {}).items()
+    )
+    residual_blocks = "".join(
+        f"<h4 style='margin-top:18px'>{escape(str(model_name).upper())} - Actual vs Predicted</h4>"
+        f"{_plotly_div_from_json((figs or {}).get('actual_vs_pred'))}"
+        f"<h4 style='margin-top:18px'>{escape(str(model_name).upper())} - Residual Distribution</h4>"
+        f"{_plotly_div_from_json((figs or {}).get('residual_hist'))}"
+        for model_name, figs in (payload.get("residual_analysis", {}) or {}).items()
+    )
     insights = payload.get("insights", [])
     insights_html = "".join(f"<li>{escape(str(x))}</li>" for x in insights)
     overview = payload.get("overview", {})
@@ -228,6 +371,8 @@ def _write_eda_html_report(payload: dict) -> str:
 <h2>EDA Analyst Report</h2>
 <pre>{escape(json.dumps(overview, indent=2))}</pre>
 {chart_blocks}
+<h3 style="margin-top:24px;">Feature Importance by Model</h3>{fi_blocks or "<p>No feature-importance data available.</p>"}
+<h3 style="margin-top:24px;">Residual Analysis by Model</h3>{residual_blocks or "<p>No residual-analysis data available.</p>"}
 <h3 style="margin-top:24px;">Summary Insights</h3>
 <ul>{insights_html}</ul>
 </body></html>"""
@@ -395,10 +540,12 @@ def home():
 
     return render_template(
         "index.html",
-        models=["xgboost", "lightgbm", "catboost", "ensemble"],
+        models=get_available_model_names(),
         metrics=metrics_df.to_dict(orient="records"),
         diagnostics=diagnostics,
         preview_rows=preview_records,
+        column_descriptions=COLUMN_DESCRIPTIONS,
+        calculated_types=CALCULATED_TYPES,
         runtime_source="Training dataset (model_metrics.csv)",
     )
 
@@ -408,8 +555,7 @@ def predict_manual():
     payload = request.get_json(force=True) if request.is_json else request.form.to_dict()
     df = pd.DataFrame([payload])
     X = prepare_input_df(df)
-    model_name = payload.get("model", "ensemble").strip().lower()
-    model = models.get(model_name, models["ensemble"])
+    model_name, model = resolve_model(payload.get("model", "ensemble"))
     X_t = preprocessor.transform(X)
     pred = model.predict(X_t)
     compute_runtime_metrics(df, "Manual input")
@@ -429,8 +575,7 @@ def predict_csv():
         return jsonify({"error": "No file uploaded"}), 400
 
     f = request.files["file"]
-    model_name = request.form.get("model", "ensemble").strip().lower()
-    model = models.get(model_name, models["ensemble"])
+    model_name, model = resolve_model(request.form.get("model", "ensemble"))
 
     df = pd.read_csv(f)
     X = prepare_input_df(df)
@@ -476,8 +621,7 @@ def generate_sample():
 def predict_sample():
     payload = request.get_json(force=True) if request.is_json else {}
     sample_data = payload.get("sample_data", [])
-    model_name = str(payload.get("model", "ensemble")).strip().lower()
-    model = models.get(model_name, models["ensemble"])
+    model_name, model = resolve_model(payload.get("model", "ensemble"))
 
     if not sample_data:
         return jsonify({"error": "No sample data provided"}), 400
@@ -586,11 +730,9 @@ def download_eda_report():
         payload["mode"] = "default_combined"
         with open(EDA_REPORT_PATH, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=True, indent=2)
-        _write_eda_html_report(payload)
-    elif not os.path.exists(EDA_REPORT_HTML_PATH):
-        with open(EDA_REPORT_PATH, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-        _write_eda_html_report(payload)
+    with open(EDA_REPORT_PATH, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+    _write_eda_html_report(payload)
     return send_file(EDA_REPORT_HTML_PATH, as_attachment=True)
 
 

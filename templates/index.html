@@ -79,7 +79,7 @@
             <label class="form-label">Select Model</label>
             <select id="modelSelect" class="form-select mb-3">
               {% for m in models %}
-              <option value="{{ m }}">{{ m|upper }}</option>
+              <option value="{{ m }}">{{ m.replace('_', ' ')|title }}</option>
               {% endfor %}
             </select>
 
@@ -144,6 +144,7 @@
                 </button>
               </div>
             </div>
+
           </div>
         </div>
       </div>
@@ -164,6 +165,11 @@
           <li class="nav-item" role="presentation">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#edaPanel" type="button" role="tab">
               EDA
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#columnDescPanel" type="button" role="tab">
+              Column Description
             </button>
           </li>
         </ul>
@@ -195,8 +201,6 @@
             <div class="card shadow-sm mb-4">
               <div class="card-body">
                 <h5 id="metricsTitle" class="card-title">Model Metrics</h5>
-                <p id="metricsSourceText" class="text-muted small mb-2">Source: {{ runtime_source }}</p>
-                <p id="metricsNoteText" class="text-muted small mb-2"></p>
                 <div class="mb-2">
                   <a class="btn btn-outline-primary btn-sm" href="/download_metrics">Download Accuracy Report (HTML)</a>
                 </div>
@@ -208,11 +212,6 @@
                         <th>MAE</th>
                         <th>RMSE</th>
                         <th>R2</th>
-                        <th>Accuracy</th>
-                        <th>Precision</th>
-                        <th>Recall</th>
-                        <th>F1</th>
-                        <th>AUC</th>
                       </tr>
                     </thead>
                     <tbody id="metricsBody">
@@ -222,20 +221,31 @@
                         <td>{{ r.MAE }}</td>
                         <td>{{ r.RMSE }}</td>
                         <td>{{ r.R2 }}</td>
-                        <td>{{ r.Accuracy }}</td>
-                        <td>{{ r.Precision }}</td>
-                        <td>{{ r.Recall }}</td>
-                        <td>{{ r.F1 }}</td>
-                        <td>{{ r.AUC }}</td>
                       </tr>
                       {% endfor %}
                     </tbody>
                   </table>
                 </div>
-                <p class="text-muted small mb-2">Confusion Matrix (best RMSE model)</p>
-                <div id="confusionMatrixPlot" style="height: 320px;"></div>
-                <p class="text-muted small mb-2 mt-3">ROC / AUC Curves</p>
-                <div id="rocAucPlot" style="height: 340px;"></div>
+                <div class="row g-3 mt-1">
+                  <div class="col-12 col-xl-7">
+                    <div class="card border-0 bg-light">
+                      <div class="card-body">
+                        <h6 class="mb-1">Error Comparison (MAE vs RMSE)</h6>
+                        <p class="text-muted small mb-2">Lower bars indicate better performance.</p>
+                        <div id="metricsErrorChart" style="height: 340px;"></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="col-12 col-xl-5">
+                    <div class="card border-0 bg-light">
+                      <div class="card-body">
+                        <h6 class="mb-1">R2 Comparison</h6>
+                        <p class="text-muted small mb-2">Higher values indicate better fit.</p>
+                        <div id="metricsR2Chart" style="height: 340px;"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -413,6 +423,88 @@
                       </div>
                     </div>
                   </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-pane fade" id="columnDescPanel" role="tabpanel">
+            <div class="card shadow-sm mb-4">
+              <div class="card-body">
+                <h5 class="card-title">Column Description</h5>
+                <p class="text-muted small mb-3">Definitions of raw dataset columns used in this project.</p>
+                <div class="accordion" id="columnDescriptionAccordionRight">
+                  {% for dataset_name, cols in column_descriptions.items() %}
+                  <div class="accordion-item">
+                    <h2 class="accordion-header" id="headingRight{{ loop.index }}">
+                      <button class="accordion-button {% if not loop.first %}collapsed{% endif %}" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#collapseRight{{ loop.index }}"
+                        aria-expanded="{{ 'true' if loop.first else 'false' }}"
+                        aria-controls="collapseRight{{ loop.index }}">
+                        {{ dataset_name }}
+                      </button>
+                    </h2>
+                    <div id="collapseRight{{ loop.index }}"
+                      class="accordion-collapse collapse {% if loop.first %}show{% endif %}"
+                      aria-labelledby="headingRight{{ loop.index }}" data-bs-parent="#columnDescriptionAccordionRight">
+                      <div class="accordion-body p-2">
+                        <div class="table-responsive">
+                          <table class="table table-sm table-bordered mb-0">
+                            <thead>
+                              <tr>
+                                <th>Column</th>
+                                <th>Description</th>
+                                <th>Role</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {% for col_name, col_meta in cols.items() %}
+                              <tr>
+                                <td><code>{{ col_name }}</code></td>
+                                <td>{{ col_meta.description }}</td>
+                                <td>
+                                  {% if col_meta.role == "Feature" %}
+                                  <span class="badge text-bg-primary">Feature</span>
+                                  {% elif col_meta.role == "Target" %}
+                                  <span class="badge text-bg-danger">Target</span>
+                                  {% else %}
+                                  <span class="badge text-bg-secondary">{{ col_meta.role }}</span>
+                                  {% endif %}
+                                </td>
+                              </tr>
+                              {% endfor %}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  {% endfor %}
+                </div>
+              </div>
+            </div>
+
+            <div class="card shadow-sm mb-4">
+              <div class="card-body">
+                <h5 class="card-title">Calculated Type</h5>
+                <p class="text-muted small mb-3">Derived/engineered columns and how each value is calculated.</p>
+                <div class="table-responsive">
+                  <table class="table table-striped align-middle">
+                    <thead>
+                      <tr>
+                        <th>Calculated Column</th>
+                        <th>Calculation Logic</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for row in calculated_types %}
+                      <tr>
+                        <td><code>{{ row.column }}</code></td>
+                        <td>{{ row.calculation }}</td>
+                      </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             </div>
