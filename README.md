@@ -1,43 +1,43 @@
 # CropIntelli - Crop Price Prediction Dashboard
 
-CropIntelli is a Flask-based ML dashboard for crop price forecasting using:
+CropIntelli is a Flask + machine learning web app for crop price forecasting.  
+It combines historical mandi price trends with yield and weather signals, then serves predictions through an interactive dashboard.
 
-- historical crop price patterns (demand-side proxy)
-- yield and weather signals (supply-side context)
-- seasonal/time features (month + seasonality)
+## What This Project Includes
 
-It supports manual prediction, CSV batch prediction, sample data generation, model comparison, and interactive EDA.
-
----
-
-## Features
-
-- Multiple regression models:
+- Multi-model regression inference:
   - `XGBoost`
   - `LightGBM`
   - `CatBoost`
+  - `Random Forest`
+  - `SVR`
   - `Ensemble (VotingRegressor)`
-- Input modes:
-  - Manual form entry
-  - CSV upload
-  - Synthetic sample generation
-- Metrics & diagnostics:
-  - MAE, RMSE, R2, Accuracy, Precision, Recall, F1, AUC
-  - Confusion Matrix and ROC/AUC chart
-- Interactive EDA tab:
-  - Upload one or both datasets
-  - Generate chart-rich analyst report
-- Downloadable reports:
-  - Predictions CSV
-  - Data overview CSV
-  - Metrics HTML report
-  - EDA HTML report
+- Prediction input modes:
+  - Manual single-entry form
+  - CSV batch upload
+  - Synthetic sample row generation
+- Runtime analytics:
+  - MAE, RMSE, R2
+  - derived classification-style metrics (Accuracy, Precision, Recall, F1, ROC-AUC)
+  - confusion matrix and ROC curve plots
+- Exploratory Data Analysis (EDA):
+  - run on default or uploaded datasets
+  - generate JSON and HTML EDA reports
+- Downloadable reports and outputs from the UI
 
----
+## Project Structure
 
-## Setup
+- `app.py` - Flask app, prediction endpoints, metrics endpoints, EDA route, report downloads
+- `train_models.py` - data preparation, feature engineering, model training/tuning, artifact export
+- `eda.py` - EDA report generation
+- `templates/index.html` - dashboard UI
+- `models/` - serialized models + preprocessor artifacts
+- `output/` - generated predictions, metrics, diagnostics, and reports
+- `Dataset/` - source datasets used for training and optional EDA
 
-### 1) Create and activate virtual environment
+## Quick Start
+
+### 1) Create and activate a virtual environment
 
 ```bash
 python3 -m venv .venv
@@ -50,62 +50,41 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-> Note (macOS): If XGBoost fails to load due to OpenMP:
->
-> ```bash
-> brew install libomp
-> ```
-
 ### 3) Train models and generate artifacts
 
 ```bash
 python train_models.py
 ```
 
-### 4) Run Flask app
+This command creates/updates artifacts in `models/` and diagnostics in `output/`.
+
+### 4) Run the Flask app
 
 ```bash
 python app.py
 ```
 
-Open: `http://127.0.0.1:5000`
+Open `http://127.0.0.1:5000` in your browser.
 
----
+## Training Pipeline (train_models.py)
 
-## Model Training Notes
+The training script performs:
 
-`train_models.py` performs:
-
-- data loading + cleaning for both datasets
-- feature engineering (lags, rolling trend, supply proxy, seasonality)
-- chronological split (time-aware holdout)
-- CatBoost hyperparameter tuning via `RandomizedSearchCV`
-- training of all models + ensemble
-- metric and diagnostic export:
+- loading and cleaning both source datasets
+- feature engineering (month/season features, lag features, rolling trend, production/supply proxy)
+- time-aware split for evaluation
+- model training for all supported regressors
+- hyperparameter search for CatBoost, Random Forest, and SVR
+- ensemble model fitting
+- export of:
+  - `models/models.pkl`
+  - `models/scaler.pkl`
   - `output/model_metrics.csv`
   - `output/model_diagnostics.json`
 
----
+## Input Schema for Prediction
 
-## Web App Workflow
-
-1. Select model (`XGBoost`, `LightGBM`, `CatBoost`, `Ensemble`)
-2. Choose input mode:
-   - Manual
-   - CSV
-   - Sample generation
-3. Run prediction
-4. View:
-   - Prediction tab
-   - Metrics tab
-   - EDA tab
-5. Download required reports
-
----
-
-## Input Schema (for CSV Upload / Manual)
-
-Expected feature columns:
+Primary expected columns (manual form / CSV):
 
 - `commodity_name`
 - `state_name`
@@ -122,46 +101,43 @@ Expected feature columns:
 - `lag_price_3`
 - `rolling_price_3`
 
-If some fields are missing, defaults/imputation are applied where possible.
-
----
+The app supports common aliases (for example `crop`, `state`, `month`, `temperature`, `humidity`, `yield`, `area`) and fills missing fields with defaults where possible.
 
 ## Flask Routes
 
-- `/` - main dashboard
-- `/predict_manual` - single-row prediction
+- `/` - dashboard home
+- `/predict_manual` - single row prediction
 - `/predict_csv` - batch prediction from uploaded CSV
-- `/generate_sample` - create synthetic sample rows
-- `/predict_sample` - run prediction on generated sample
-- `/metrics` - metrics + diagnostics JSON
-- `/eda_analysis` - run EDA on uploaded/default datasets
-- `/download_predictions` - download prediction CSV
-- `/download_overview` - download current overview CSV
+- `/generate_sample` - synthetic sample generation
+- `/predict_sample` - predict generated samples
+- `/metrics` - latest metrics and diagnostics payload
+- `/eda_analysis` - execute EDA on uploaded/default datasets
+- `/download_predictions` - download `predictions.csv`
+- `/download_overview` - download `data_overview.csv`
 - `/download_metrics` - download metrics HTML report
 - `/download_eda_report` - download EDA HTML report
 
----
+## Generated Artifacts
 
-## Report Downloads
+After using training and/or dashboard workflows, you will typically see:
 
-- **Accuracy Report (HTML)** in Metrics tab:
-  - table + confusion matrix + ROC/AUC
-- **EDA Report (HTML)** in EDA tab:
-  - all chart sections rendered as a visual analyst report
-
----
+- `models/models.pkl`
+- `models/scaler.pkl`
+- `output/predictions.csv`
+- `output/data_overview.csv`
+- `output/model_metrics.csv`
+- `output/model_diagnostics.json`
+- `output/metrics_report.html`
+- `output/eda_report.json`
+- `output/eda_report.html`
 
 ## Troubleshooting
 
-- **Charts not updating / old UI**
+- **XGBoost import issue on macOS (OpenMP)**
+  - run: `brew install libomp`
+- **Dashboard shows stale charts or state**
   - hard refresh browser (`Cmd + Shift + R`)
-  - restart Flask server
-
-- **XGBoost import error on macOS**
-  - install OpenMP (`brew install libomp`)
-
-- **EDA upload error with single file**
-  - ensure valid CSV format and required columns for that mode
-  - check Flask terminal logs for malformed date/column types
-
----
+  - restart `python app.py`
+- **CSV upload or EDA parsing errors**
+  - verify column names and data types
+  - check Flask terminal logs for exact error details
