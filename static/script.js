@@ -4,6 +4,7 @@ function getModel() {
 
 let generatedSampleData = [];
 let edaCache = null;
+let latestMetricsPayload = { metrics: [], diagnostics: {}, source: "N/A" };
 
 function activateRightTab(tabPanelId) {
   const tabBtn = document.querySelector(`#rightPanelTabs button[data-bs-target="#${tabPanelId}"]`);
@@ -341,7 +342,7 @@ function updateFeatureImportance() {
   }
 }
 
-function renderMetricsDiagnostics(diag) {
+function renderMetricsDiagnostics(diag, selectedModel) {
   if (!diag || !diag.models || !Object.keys(diag.models).length) {
     const cmEl = document.getElementById("confusionMatrixPlot");
     const rocEl = document.getElementById("rocAucPlot");
@@ -351,8 +352,8 @@ function renderMetricsDiagnostics(diag) {
   }
 
   const modelKeys = Object.keys(diag.models || {});
-  const bestModel = diag.best_model || (modelKeys.length ? modelKeys[0] : null);
-  const best = bestModel ? diag.models[bestModel] : null;
+  const chosenModel = (selectedModel && diag.models[selectedModel]) ? selectedModel : (diag.best_model || modelKeys[0]);
+  const best = chosenModel ? diag.models[chosenModel] : null;
   if (best && best.confusion_matrix) {
     const cm = best.confusion_matrix;
     const cmFig = {
@@ -369,7 +370,7 @@ function renderMetricsDiagnostics(diag) {
         }
       ],
       layout: {
-        title: `Confusion Matrix - ${bestModel.toUpperCase()}`,
+        title: `Confusion Matrix - ${chosenModel.toUpperCase()}`,
         margin: { t: 50, l: 70, r: 20, b: 50 },
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
@@ -380,17 +381,17 @@ function renderMetricsDiagnostics(diag) {
   }
 
   const rocTraces = [];
-  Object.entries(diag.models).forEach(([modelName, modelData]) => {
-    const roc = modelData.roc_curve;
-    if (!roc || !roc.fpr || !roc.tpr) return;
+  const chosenDiag = chosenModel ? diag.models[chosenModel] : null;
+  const roc = chosenDiag ? chosenDiag.roc_curve : null;
+  if (roc && roc.fpr && roc.tpr) {
     rocTraces.push({
       x: roc.fpr,
       y: roc.tpr,
       mode: "lines",
       type: "scatter",
-      name: `${modelName.toUpperCase()} (AUC=${Number(roc.auc).toFixed(3)})`
+      name: `${chosenModel.toUpperCase()} (AUC=${Number(roc.auc).toFixed(3)})`
     });
-  });
+  }
   rocTraces.push({
     x: [0, 1],
     y: [0, 1],
@@ -404,7 +405,7 @@ function renderMetricsDiagnostics(diag) {
       "rocAucPlot",
       rocTraces,
       {
-        title: "ROC Curves",
+        title: `ROC Curve - ${chosenModel.toUpperCase()}`,
         xaxis: { title: "False Positive Rate" },
         yaxis: { title: "True Positive Rate" },
         margin: { t: 50, l: 60, r: 20, b: 60 },
@@ -416,26 +417,24 @@ function renderMetricsDiagnostics(diag) {
   }
 }
 
-function renderMetricsTable(rows, source) {
+function renderMetricsTable(rows, source, selectedModel) {
   const tbody = document.getElementById("metricsBody");
   if (!tbody) return;
   const sourceEl = document.getElementById("metricsSourceText");
   const noteEl = document.getElementById("metricsNoteText");
+  const titleEl = document.getElementById("metricsTitle");
   if (sourceEl) sourceEl.innerText = `Source: ${source || "N/A"}`;
+  if (titleEl) titleEl.innerText = `Model Metrics${selectedModel ? ` - ${String(selectedModel).toUpperCase()}` : ""}`;
 
-  const list = Array.isArray(rows) ? rows : [];
+  const allRows = Array.isArray(rows) ? rows : [];
+  const list = selectedModel ? allRows.filter((r) => String(r.model).toLowerCase() === String(selectedModel).toLowerCase()) : allRows;
   if (!list.length) {
-    tbody.innerHTML = `<tr><td colspan="9" class="text-muted">Run a prediction to view metrics for the current website input.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="text-muted">No metrics available for selected model yet. Run prediction first.</td></tr>`;
     if (noteEl) noteEl.innerText = "";
     return;
   }
 
-  const hasActual = list.some((r) => r.MAE !== null && r.MAE !== undefined);
-  if (noteEl) {
-    noteEl.innerText = hasActual
-      ? "Metrics are computed from the current input data."
-      : "No actual target price found in current input; showing prediction-only summary.";
-  }
+  if (noteEl) noteEl.innerText = "These values are loaded from training output (model_metrics.csv).";
 
   const fmt = (v) => (v === null || v === undefined || Number.isNaN(v) ? "-" : v);
   tbody.innerHTML = list
@@ -449,7 +448,7 @@ function renderMetricsTable(rows, source) {
       <td>${fmt(r.Precision)}</td>
       <td>${fmt(r.Recall)}</td>
       <td>${fmt(r.F1)}</td>
-      <td>${fmt(r.AvgPredPrice)}</td>
+      <td>${fmt(r.AUC)}</td>
     </tr>`
     )
     .join("");
@@ -462,15 +461,28 @@ async function loadMetricsDiagnostics() {
     if (!res.ok) {
       throw new Error(data.error || "Failed to load metrics diagnostics");
     }
-    renderMetricsTable(data.metrics || [], data.source);
-    renderMetricsDiagnostics(data.diagnostics || {});
+    latestMetricsPayload = {
+      metrics: data.metrics || [],
+      diagnostics: data.diagnostics || {},
+      source: data.source || "N/A",
+    };
+    const selectedModel = getModel();
+    renderMetricsTable(latestMetricsPayload.metrics, latestMetricsPayload.source, selectedModel);
+    renderMetricsDiagnostics(latestMetricsPayload.diagnostics, selectedModel);
   } catch (err) {
     const cm = document.getElementById("confusionMatrixPlot");
     const roc = document.getElementById("rocAucPlot");
     if (cm) cm.innerHTML = `<div class="text-danger small">Confusion matrix load error: ${err.message}</div>`;
     if (roc) roc.innerHTML = `<div class="text-danger small">ROC/AUC load error: ${err.message}</div>`;
-    renderMetricsTable([], "Error loading metrics");
+    latestMetricsPayload = { metrics: [], diagnostics: {}, source: "Error loading metrics" };
+    renderMetricsTable([], "Error loading metrics", getModel());
   }
+}
+
+function refreshMetricsForSelectedModel() {
+  const selectedModel = getModel();
+  renderMetricsTable(latestMetricsPayload.metrics || [], latestMetricsPayload.source || "N/A", selectedModel);
+  renderMetricsDiagnostics(latestMetricsPayload.diagnostics || {}, selectedModel);
 }
 
 function initEdaPlaceholders() {
@@ -498,6 +510,10 @@ document.addEventListener("DOMContentLoaded", () => {
   syncOverviewToggleText();
   loadMetricsDiagnostics();
   initEdaPlaceholders();
+  const modelSelect = document.getElementById("modelSelect");
+  if (modelSelect) {
+    modelSelect.addEventListener("change", refreshMetricsForSelectedModel);
+  }
 
   // Fix plot resizing issues when switching tabs
   const tabEls = document.querySelectorAll('button[data-bs-toggle="tab"]');

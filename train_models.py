@@ -16,11 +16,13 @@ from sklearn.metrics import (
     roc_curve,
     auc,
 )
+from sklearn.model_selection import TimeSeriesSplit, RandomizedSearchCV
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.ensemble import VotingRegressor, RandomForestRegressor
+from scipy import sparse
 
 warnings.filterwarnings("ignore")
 
@@ -36,6 +38,50 @@ DIAG_PATH = os.path.join(OUTPUT_DIR, "model_diagnostics.json")
 
 os.makedirs(MODEL_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+BEST_XGB_PARAMS = {
+    "n_estimators": 260,
+    "max_depth": 4,
+    "learning_rate": 0.03,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 5,
+    "reg_alpha": 0.1,
+    "reg_lambda": 5.0,
+    "random_state": 42,
+}
+
+BEST_LGBM_PARAMS = {
+    "n_estimators": 420,
+    "learning_rate": 0.03,
+    "num_leaves": 31,
+    "max_depth": 8,
+    "min_child_samples": 40,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "reg_alpha": 0.1,
+    "reg_lambda": 3.0,
+    "random_state": 42,
+}
+
+BEST_CATBOOST_PARAMS = {
+    "iterations": 500,
+    "depth": 6,
+    "learning_rate": 0.03,
+    "l2_leaf_reg": 5.0,
+    "loss_function": "RMSE",
+    "random_seed": 42,
+    "verbose": 0,
+}
+
+CATBOOST_SEARCH_SPACE = {
+    "iterations": [300, 500, 700, 900],
+    "depth": [4, 5, 6, 7, 8],
+    "learning_rate": [0.01, 0.02, 0.03, 0.05],
+    "l2_leaf_reg": [3.0, 5.0, 7.0, 10.0],
+    "bagging_temperature": [0.0, 0.5, 1.0, 2.0],
+    "random_strength": [0.0, 0.5, 1.0, 2.0],
+}
 
 
 def month_to_season(month_num: int) -> str:
@@ -182,25 +228,40 @@ def train():
     try:
         from xgboost import XGBRegressor
 
-        xgb = XGBRegressor(
-            n_estimators=350,
-            learning_rate=0.05,
-            max_depth=6,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            random_state=42,
-        )
+        xgb = XGBRegressor(**BEST_XGB_PARAMS)
     except Exception:
         xgb = RandomForestRegressor(n_estimators=400, random_state=42)
 
     try:
         from lightgbm import LGBMRegressor
 
-        lgbm = LGBMRegressor(
-            n_estimators=450, learning_rate=0.05, num_leaves=31, random_state=42
-        )
+        lgbm = LGBMRegressor(**BEST_LGBM_PARAMS)
     except Exception:
         lgbm = RandomForestRegressor(n_estimators=500, random_state=42)
+
+    try:
+        from catboost import CatBoostRegressor
+
+        catboost_model = CatBoostRegressor(**BEST_CATBOOST_PARAMS)
+    except Exception:
+        catboost_model = RandomForestRegressor(n_estimators=550, random_state=42)
+
+    if catboost_model.__class__.__name__ == "CatBoostRegressor":
+        tscv = TimeSeriesSplit(n_splits=4)
+        X_train_cat = X_train_t.toarray() if sparse.issparse(X_train_t) else X_train_t
+        cat_search = RandomizedSearchCV(
+            estimator=catboost_model,
+            param_distributions=CATBOOST_SEARCH_SPACE,
+            n_iter=15,
+            scoring="neg_root_mean_squared_error",
+            cv=tscv,
+            n_jobs=-1,
+            random_state=42,
+            verbose=0,
+        )
+        cat_search.fit(X_train_cat, y_train)
+        catboost_model = cat_search.best_estimator_
+        print(f"Tuned CatBoost best params: {cat_search.best_params_}")
 
     ensemble = VotingRegressor(
         estimators=[
@@ -212,6 +273,7 @@ def train():
     models = {
         "xgboost": xgb,
         "lightgbm": lgbm,
+        "catboost": catboost_model,
         "ensemble": ensemble,
     }
 
@@ -220,8 +282,10 @@ def train():
     diagnostics = {"models": {}, "best_model": None}
 
     for name, model in models.items():
-        model.fit(X_train_t, y_train)
-        pred = model.predict(X_test_t)
+        X_train_model = X_train_t.toarray() if (name == "catboost" and sparse.issparse(X_train_t)) else X_train_t
+        X_test_model = X_test_t.toarray() if (name == "catboost" and sparse.issparse(X_test_t)) else X_test_t
+        model.fit(X_train_model, y_train)
+        pred = model.predict(X_test_model)
         mae = mean_absolute_error(y_test, pred)
         rmse = np.sqrt(mean_squared_error(y_test, pred))
         r2 = r2_score(y_test, pred)

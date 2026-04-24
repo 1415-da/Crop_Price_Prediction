@@ -163,7 +163,7 @@
           </li>
           <li class="nav-item" role="presentation">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#edaPanel" type="button" role="tab">
-              edaSummary
+              EDA
             </button>
           </li>
         </ul>
@@ -194,7 +194,7 @@
           <div class="tab-pane fade" id="metricsPanel" role="tabpanel">
             <div class="card shadow-sm mb-4">
               <div class="card-body">
-                <h5 class="card-title">Model Metrics</h5>
+                <h5 id="metricsTitle" class="card-title">Model Metrics</h5>
                 <p id="metricsSourceText" class="text-muted small mb-2">Source: {{ runtime_source }}</p>
                 <p id="metricsNoteText" class="text-muted small mb-2"></p>
                 <div class="table-responsive">
@@ -209,7 +209,7 @@
                         <th>Precision</th>
                         <th>Recall</th>
                         <th>F1</th>
-                        <th>Avg Pred Price</th>
+                        <th>AUC</th>
                       </tr>
                     </thead>
                     <tbody id="metricsBody">
@@ -223,7 +223,7 @@
                         <td>{{ r.Precision }}</td>
                         <td>{{ r.Recall }}</td>
                         <td>{{ r.F1 }}</td>
-                        <td>{{ r.AvgPredPrice }}</td>
+                        <td>{{ r.AUC }}</td>
                       </tr>
                       {% endfor %}
                     </tbody>

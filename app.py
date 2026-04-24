@@ -266,19 +266,19 @@ def generate_sample_rows(n=10):
 
 @app.route("/")
 def home():
-    metrics_df = pd.DataFrame(runtime_metrics_rows)
-    diagnostics = runtime_diagnostics
+    metrics_df = get_metrics_df()
+    diagnostics = get_diagnostics()
 
     preview = pd.DataFrame(artifacts.get("sample_preview", [])).head(5)
     preview_records = preview.to_dict(orient="records") if not preview.empty else []
 
     return render_template(
         "index.html",
-        models=["xgboost", "lightgbm", "ensemble"],
+        models=["xgboost", "lightgbm", "catboost", "ensemble"],
         metrics=metrics_df.to_dict(orient="records"),
         diagnostics=diagnostics,
         preview_rows=preview_records,
-        runtime_source=runtime_source,
+        runtime_source="Training dataset (model_metrics.csv)",
     )
 
 
@@ -387,12 +387,12 @@ def predict_sample():
 
 @app.route("/metrics", methods=["GET"])
 def metrics():
-    metrics_df = pd.DataFrame(runtime_metrics_rows)
+    metrics_df = get_metrics_df()
     return jsonify(
         {
             "metrics": metrics_df.to_dict(orient="records"),
-            "diagnostics": runtime_diagnostics,
-            "source": runtime_source,
+            "diagnostics": get_diagnostics(),
+            "source": "Training dataset (model_metrics.csv)",
         }
     )
 
