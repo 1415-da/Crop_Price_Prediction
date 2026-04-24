@@ -1,11 +1,13 @@
 import os
 import json
 import pickle
+from html import escape
 import numpy as np
 import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_curve, auc
 import plotly.express as px
 import plotly
+import plotly.io as pio
 from flask import Flask, render_template, request, jsonify, send_file
 from eda import generate_eda_report
 
@@ -18,6 +20,9 @@ METRICS_PATH = os.path.join(OUTPUT_DIR, "model_metrics.csv")
 PRED_PATH = os.path.join(OUTPUT_DIR, "predictions.csv")
 OVERVIEW_PATH = os.path.join(OUTPUT_DIR, "data_overview.csv")
 DIAG_PATH = os.path.join(OUTPUT_DIR, "model_diagnostics.json")
+EDA_REPORT_PATH = os.path.join(OUTPUT_DIR, "eda_report.json")
+EDA_REPORT_HTML_PATH = os.path.join(OUTPUT_DIR, "eda_report.html")
+METRICS_REPORT_HTML_PATH = os.path.join(OUTPUT_DIR, "metrics_report.html")
 PRICE_PATH = os.path.join(DATA_DIR, "crop_price_dataset.csv")
 YIELD_PATH = os.path.join(DATA_DIR, "Custom_Crops_yield_Historical_Dataset.csv")
 
@@ -113,6 +118,122 @@ def get_diagnostics():
         except Exception:
             return {"models": {}, "best_model": None}
     return {"models": {}, "best_model": None}
+
+
+def _plotly_div_from_json(fig_json: str) -> str:
+    if not fig_json:
+        return "<p>No chart data.</p>"
+    try:
+        fig = pio.from_json(fig_json)
+        return pio.to_html(fig, include_plotlyjs=False, full_html=False, config={"responsive": True})
+    except Exception:
+        return "<p>Chart unavailable.</p>"
+
+
+def _write_metrics_html_report(metrics_df: pd.DataFrame, diagnostics: dict, source: str) -> str:
+    rows = metrics_df.to_dict(orient="records")
+    table_rows = "".join(
+        f"<tr><td>{escape(str(r.get('model', '')))}</td>"
+        f"<td>{escape(str(r.get('MAE', '-')))}</td>"
+        f"<td>{escape(str(r.get('RMSE', '-')))}</td>"
+        f"<td>{escape(str(r.get('R2', '-')))}</td>"
+        f"<td>{escape(str(r.get('Accuracy', '-')))}</td>"
+        f"<td>{escape(str(r.get('Precision', '-')))}</td>"
+        f"<td>{escape(str(r.get('Recall', '-')))}</td>"
+        f"<td>{escape(str(r.get('F1', '-')))}</td>"
+        f"<td>{escape(str(r.get('AUC', '-')))}</td></tr>"
+        for r in rows
+    )
+
+    cm_div = "<p>No confusion matrix available.</p>"
+    roc_div = "<p>No ROC/AUC chart available.</p>"
+    model_keys = list((diagnostics or {}).get("models", {}).keys())
+    chosen = (diagnostics or {}).get("best_model") or (model_keys[0] if model_keys else None)
+    if chosen:
+        chosen_diag = diagnostics["models"].get(chosen, {})
+        cm = chosen_diag.get("confusion_matrix")
+        roc = chosen_diag.get("roc_curve")
+        if cm:
+            cm_fig = {
+                "data": [{
+                    "z": cm,
+                    "x": ["Pred Down", "Pred Up"],
+                    "y": ["Actual Down", "Actual Up"],
+                    "type": "heatmap",
+                    "colorscale": "Blues",
+                    "showscale": True,
+                }],
+                "layout": {"title": f"Confusion Matrix - {chosen.upper()}"}
+            }
+            cm_div = pio.to_html(cm_fig, include_plotlyjs=False, full_html=False)
+        if roc and roc.get("fpr") and roc.get("tpr"):
+            roc_fig = {
+                "data": [
+                    {"x": roc["fpr"], "y": roc["tpr"], "mode": "lines", "type": "scatter", "name": f"{chosen.upper()} (AUC={roc.get('auc', 0):.3f})"},
+                    {"x": [0, 1], "y": [0, 1], "mode": "lines", "type": "scatter", "name": "Random", "line": {"dash": "dash"}},
+                ],
+                "layout": {"title": "ROC Curve", "xaxis": {"title": "FPR"}, "yaxis": {"title": "TPR"}}
+            }
+            roc_div = pio.to_html(roc_fig, include_plotlyjs=False, full_html=False)
+
+    html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>Metrics Report</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>body{{font-family:Inter,Arial,sans-serif;margin:24px}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #ddd;padding:8px}}th{{background:#f3f4f6}}</style>
+</head><body>
+<h2>Model Metrics Report</h2>
+<p><strong>Source:</strong> {escape(source or 'N/A')}</p>
+<table>
+<thead><tr><th>Model</th><th>MAE</th><th>RMSE</th><th>R2</th><th>Accuracy</th><th>Precision</th><th>Recall</th><th>F1</th><th>AUC</th></tr></thead>
+<tbody>{table_rows}</tbody>
+</table>
+<h3 style="margin-top:24px;">Confusion Matrix</h3>{cm_div}
+<h3 style="margin-top:24px;">ROC / AUC</h3>{roc_div}
+</body></html>"""
+    with open(METRICS_REPORT_HTML_PATH, "w", encoding="utf-8") as f:
+        f.write(html)
+    return METRICS_REPORT_HTML_PATH
+
+
+def _write_eda_html_report(payload: dict) -> str:
+    charts = payload.get("charts", {})
+    sections = [
+        ("Missing Values", charts.get("missing_values")),
+        ("Price Histogram", charts.get("price_histogram")),
+        ("Price Boxplot", charts.get("price_boxplot")),
+        ("Seasonal Trend", charts.get("seasonal_trend")),
+        ("Top Priced Crops", charts.get("crop_price_top")),
+        ("Lowest Priced Crops", charts.get("crop_price_low")),
+        ("State/Market Price", charts.get("state_price")),
+        ("Yield vs Price", charts.get("yield_vs_price")),
+        ("Rainfall vs Price", charts.get("rainfall_vs_price")),
+        ("Temperature vs Price", charts.get("temperature_vs_price")),
+        ("Humidity vs Price", charts.get("humidity_vs_price")),
+        ("Correlation Heatmap", charts.get("correlation")),
+        ("Outlier Detection", charts.get("outliers")),
+    ]
+    chart_blocks = "".join(
+        f"<h3 style='margin-top:24px'>{escape(title)}</h3>{_plotly_div_from_json(fig_json)}"
+        for title, fig_json in sections
+    )
+    insights = payload.get("insights", [])
+    insights_html = "".join(f"<li>{escape(str(x))}</li>" for x in insights)
+    overview = payload.get("overview", {})
+
+    html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>EDA Report</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>body{{font-family:Inter,Arial,sans-serif;margin:24px}}</style>
+</head><body>
+<h2>EDA Analyst Report</h2>
+<pre>{escape(json.dumps(overview, indent=2))}</pre>
+{chart_blocks}
+<h3 style="margin-top:24px;">Summary Insights</h3>
+<ul>{insights_html}</ul>
+</body></html>"""
+    with open(EDA_REPORT_HTML_PATH, "w", encoding="utf-8") as f:
+        f.write(html)
+    return EDA_REPORT_HTML_PATH
 
 
 def _pick_target_column(df: pd.DataFrame):
@@ -426,6 +547,9 @@ def eda_analysis():
 
     payload = generate_eda_report(price_df, yield_df, diagnostics)
     payload["mode"] = mode
+    with open(EDA_REPORT_PATH, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=True, indent=2)
+    _write_eda_html_report(payload)
     return jsonify(payload)
 
 
@@ -441,6 +565,33 @@ def download_overview():
     if not os.path.exists(OVERVIEW_PATH):
         return jsonify({"error": "Data overview file not found"}), 404
     return send_file(OVERVIEW_PATH, as_attachment=True)
+
+
+@app.route("/download_metrics", methods=["GET"])
+def download_metrics():
+    metrics_df = get_metrics_df()
+    if metrics_df.empty:
+        return jsonify({"error": "Metrics report not found"}), 404
+    report_path = _write_metrics_html_report(metrics_df, get_diagnostics(), "Training dataset (model_metrics.csv)")
+    return send_file(report_path, as_attachment=True)
+
+
+@app.route("/download_eda_report", methods=["GET"])
+def download_eda_report():
+    if not os.path.exists(EDA_REPORT_PATH):
+        diagnostics = get_diagnostics()
+        default_price = pd.read_csv(PRICE_PATH)
+        default_yield = pd.read_csv(YIELD_PATH)
+        payload = generate_eda_report(default_price, default_yield, diagnostics)
+        payload["mode"] = "default_combined"
+        with open(EDA_REPORT_PATH, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=True, indent=2)
+        _write_eda_html_report(payload)
+    elif not os.path.exists(EDA_REPORT_HTML_PATH):
+        with open(EDA_REPORT_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        _write_eda_html_report(payload)
+    return send_file(EDA_REPORT_HTML_PATH, as_attachment=True)
 
 
 if __name__ == "__main__":

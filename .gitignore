@@ -211,4 +211,10 @@ __marimo__/
 Dataset/.DS_Store
 models/
 output/predictions.csv
+output/model_metrics.csv
+output/model_diagnostics.json
+output/data_overview.csv
+output/eda_report.json
+output/eda_report.html
+output/metrics_report.html
 *.pkl
